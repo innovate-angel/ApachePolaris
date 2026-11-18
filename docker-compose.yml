@@ -1,0 +1,73 @@
+name: polaris
+
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: POLARIS
+      POSTGRES_USER: ${POSTGRES_USER:-polaris}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d POLARIS"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # intentionally not published to the host
+
+  polaris-bootstrap:
+    image: apache/polaris-admin-tool:1.8.0
+    profiles: ["bootstrap"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POLARIS_PERSISTENCE_TYPE: relational-jdbc
+      POLARIS_PERSISTENCE_RELATIONAL_JDBC_DATABASE_TYPE: postgresql
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres:5432/POLARIS
+      QUARKUS_DATASOURCE_USERNAME: ${POSTGRES_USER:-polaris}
+      QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      QUARKUS_OTEL_SDK_DISABLED: "true"
+    command: >
+      bootstrap --realm=POLARIS
+      --credential=POLARIS,${POLARIS_ROOT_CLIENT_ID:-root},${POLARIS_ROOT_CLIENT_SECRET:?Set POLARIS_ROOT_CLIENT_SECRET in .env}
+
+  polaris:
+    image: apache/polaris:1.8.0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      # Iceberg REST / management API for the existing nginx reverse proxy.
+      # Block 8181 from the internet in the NSG / host firewall; only nginx (443) is public.
+      - "8181:8181"
+      # management/health port exposed on localhost only
+      - "127.0.0.1:8182:8182"
+    environment:
+      POLARIS_PERSISTENCE_TYPE: relational-jdbc
+      POLARIS_PERSISTENCE_RELATIONAL_JDBC_DATABASE_TYPE: postgresql
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres:5432/POLARIS
+      QUARKUS_DATASOURCE_USERNAME: ${POSTGRES_USER:-polaris}
+      QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POLARIS_REALM_CONTEXT_REALMS: POLARIS
+      QUARKUS_OTEL_SDK_DISABLED: "true"
+      # Azure credentials for ADLS access (all optional; see .env.example)
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
+      POLARIS_TOKEN_BROKER_SECRET: ${POLARIS_TOKEN_BROKER_SECRET:?Set POLARIS_TOKEN_BROKER_SECRET in .env}
+    volumes:
+      - ./polaris/application.properties:/deployments/config/application.properties:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:8182/q/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+volumes:
+  postgres-data:
