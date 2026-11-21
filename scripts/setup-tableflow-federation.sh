@@ -7,6 +7,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source .env
 
+REALM="${POLARIS_REALM:-ISBUS}"
+
 for v in AZURE_TENANT_ID AZURE_STORAGE_ACCOUNT AZURE_STORAGE_CONTAINER \
          TABLEFLOW_PROXY_BASE_URL TABLEFLOW_ORG_ID TABLEFLOW_ENV_ID \
          TABLEFLOW_API_KEY TABLEFLOW_API_SECRET \
@@ -26,12 +28,13 @@ BASE_LOC="abfss://${AZURE_STORAGE_CONTAINER}@${AZURE_STORAGE_ACCOUNT}.dfs.core.w
 CATALOG_URI="${TABLEFLOW_CATALOG_URI:-${TABLEFLOW_PROXY_BASE_URL%/}/iceberg/catalog/organizations/${TABLEFLOW_ORG_ID}/environments/${TABLEFLOW_ENV_ID}}"
 TOKEN_URI="${TABLEFLOW_TOKEN_URI:-${CATALOG_URI}/v1/oauth/tokens}"
 
-echo "==> Getting Polaris root token from ${POLARIS_URL}"
+echo "==> Getting Polaris administrator token (${POLARIS_ROOT_CLIENT_ID}) from ${POLARIS_URL}"
 resp="$("${CURL[@]}" -X POST "${POLARIS_URL}/api/catalog/v1/oauth/tokens" \
+  -H "Polaris-Realm: ${REALM}" \
   -d "grant_type=client_credentials&client_id=${POLARIS_ROOT_CLIENT_ID}&client_secret=${POLARIS_ROOT_CLIENT_SECRET}&scope=PRINCIPAL_ROLE:ALL")"
 TOKEN="$(jq -r .access_token <<<"$resp")"
 [[ "$TOKEN" != "null" && -n "$TOKEN" ]] || { echo "ERROR: token request failed: $resp"; exit 1; }
-AUTH=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
+AUTH=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -H "Polaris-Realm: ${REALM}")
 
 # request <method> <url> [json-body] -> prints "<code>\n<body>"
 request() {
@@ -136,7 +139,7 @@ cat <<OUT
 
 === Done ===
 Federated catalog : ${CATALOG} (type EXTERNAL -> Tableflow via ${CATALOG_URI})
-Root principal    : ${POLARIS_ROOT_CLIENT_ID} now reads it via 'service_admin' -> '${CATALOG_ROLE}'
+Administrator     : ${POLARIS_ROOT_CLIENT_ID} now reads it via 'service_admin' -> '${CATALOG_ROLE}'
 Next              : ./scripts/check-tableflow.sh   # sanity-check nginx->Tableflow directly
                     ./scripts/verify.sh          # exercise the federated catalog through Polaris
 OUT

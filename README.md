@@ -80,11 +80,11 @@ git clone <this repo> && cd ApachePolaris
 cp .env.example .env && editor .env     # fill in all values
 
 docker compose up -d postgres
-./scripts/bootstrap.sh                  # one-off: creates realm POLARIS + service_admin
+./scripts/bootstrap.sh                  # one-off: creates realm ISBUS + service_admin
 docker compose up -d                    # polaris on :8181
 
 ./scripts/check-tableflow.sh            # sanity: nginx -> Tableflow, without Polaris
-./scripts/setup-tableflow-federation.sh # creates EXTERNAL catalog + role/grant for root
+./scripts/setup-tableflow-federation.sh # creates EXTERNAL catalog + role/grant for M73580
 ./scripts/verify.sh                     # token -> config -> namespaces -> loadTable (SAS check)
 ```
 
@@ -106,6 +106,6 @@ docker compose up -d                    # polaris on :8181
 
 ## Operations
 
-- **Backup**: `docker compose exec postgres pg_dump -U polaris POLARIS > backup.sql`
+- **Backup**: `docker compose exec postgres pg_dump -U M73581 POLARIS > backup.sql`
 - **Logs**: `docker compose logs -f polaris`
 >>>>>>> 175c22f (Add local project files)

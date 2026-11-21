@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercises the federated catalog through Polaris as the root principal:
+# Exercises the federated catalog through Polaris as the bootstrap administrator:
 # token -> /v1/config -> namespaces -> first namespace's tables -> loadTable
 # with vended-credentials (checks whether ADLS SAS keys are vended).
 # Requires curl + jq. Set CURL_INSECURE=1 for self-signed certs.
@@ -7,18 +7,20 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source .env
 
+REALM="${POLARIS_REALM:-ISBUS}"
 CURL=(curl -sS)
 [[ "${CURL_INSECURE:-0}" == "1" ]] && CURL+=(-k)
 
 BASE="${POLARIS_URL:-http://localhost:8181}"
 CATALOG="${POLARIS_CATALOG_NAME:-tableflow}"
 
-echo "==> Root token from ${BASE}"
+echo "==> Administrator token (${POLARIS_ROOT_CLIENT_ID}) from ${BASE}"
 TOKEN="$("${CURL[@]}" -X POST "${BASE}/api/catalog/v1/oauth/tokens" \
+  -H "Polaris-Realm: ${REALM}" \
   -d "grant_type=client_credentials&client_id=${POLARIS_ROOT_CLIENT_ID}&client_secret=${POLARIS_ROOT_CLIENT_SECRET}&scope=PRINCIPAL_ROLE:ALL" \
   | jq -r .access_token)"
 [[ "$TOKEN" != "null" && -n "$TOKEN" ]] || { echo "ERROR: token request failed"; exit 1; }
-AUTH=(-H "Authorization: Bearer ${TOKEN}")
+AUTH=(-H "Authorization: Bearer ${TOKEN}" -H "Polaris-Realm: ${REALM}")
 echo "    token: OK (${#TOKEN} chars)"
 
 echo "==> GET /api/catalog/v1/config?warehouse=${CATALOG}"
