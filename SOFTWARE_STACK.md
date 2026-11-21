@@ -1,5 +1,8 @@
 # Apache Polaris Deployment Software and Framework Inventory
 
+**Author:** Angel Vega  
+**Date:** 2026-11-21
+
 This document describes the software and frameworks used by the Apache Polaris
 1.8.0 deployment in this repository.
 

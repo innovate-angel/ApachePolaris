@@ -1,8 +1,14 @@
 # Installing Apache Polaris (container) on an Azure VM
 
+**Author:** Angel Vega  
+**Date:** 2026-11-21
+
 Step-by-step instructions to deploy open-source Apache Polaris 1.8.0 with
 Docker Compose on an Azure Linux VM and federate it to the Confluent Cloud
 Tableflow Iceberg REST catalog, with Azure ADLS Gen2 access for table files.
+
+For CLI installation and administration, see
+[Apache Polaris CLI](POLARIS_CLI.md).
 
 ---
 
