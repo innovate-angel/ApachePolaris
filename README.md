@@ -5,8 +5,8 @@ catalog) on a single Azure Linux VM with Docker Compose + Postgres, configured
 to **federate** to the Confluent Cloud **Tableflow** Iceberg REST catalog and
 vend ADLS Gen2 credentials for the Tableflow BYOS container.
 
-For server deployment, see [install_instructions_polaris_container.md](install_instructions_polaris_container.md).
-For CLI installation and administration, see [POLARIS_CLI.md](POLARIS_CLI.md).
+For server deployment, see [install_instructions_polaris_container.md](docs/install_instructions_polaris_container.md).
+For CLI installation and administration, see [POLARIS_CLI.md](docs/POLARIS_CLI.md).
 For test cases and validation procedures, see [docs/tests/README.md](docs/tests/README.md).
 
 ## What "federation" means here
