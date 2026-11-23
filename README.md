@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-# ApachePolaris
-=======
 # Apache Polaris federating to Confluent Cloud Tableflow
 
 Deploys open-source [Apache Polaris](https://polaris.apache.org) (Iceberg REST
@@ -10,6 +7,7 @@ vend ADLS Gen2 credentials for the Tableflow BYOS container.
 
 For server deployment, see [install_instructions_polaris_container.md](install_instructions_polaris_container.md).
 For CLI installation and administration, see [POLARIS_CLI.md](POLARIS_CLI.md).
+For test cases and validation procedures, see [docs/tests/README.md](docs/tests/README.md).
 
 ## What "federation" means here
 
@@ -111,4 +109,3 @@ docker compose up -d                    # polaris on :8181
 
 - **Backup**: `docker compose exec postgres pg_dump -U M73581 POLARIS > backup.sql`
 - **Logs**: `docker compose logs -f polaris`
->>>>>>> 175c22f (Add local project files)

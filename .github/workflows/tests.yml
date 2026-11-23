@@ -1,0 +1,14 @@
+name: Polaris deployment tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - run: make compose-validate
+      - run: make test-unit

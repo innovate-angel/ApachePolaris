@@ -67,7 +67,7 @@ services:
       AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
       POLARIS_TOKEN_BROKER_SECRET: ${POLARIS_TOKEN_BROKER_SECRET:?Set POLARIS_TOKEN_BROKER_SECRET in .env}
     volumes:
-      - ./polaris/application.properties:/deployments/config/application.properties:ro
+      - ./configs/polaris/application.properties:/deployments/config/application.properties:ro
     healthcheck:
       test: ["CMD-SHELL", "curl --fail http://localhost:8182/q/health || exit 1"]
       interval: 10s

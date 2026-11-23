@@ -148,7 +148,7 @@ Expected layout on the VM:
 ApachePolaris/
 ├── docker-compose.yml
 ├── .env.example
-├── polaris/application.properties
+├── configs/polaris/application.properties
 ├── postgres/initdb/01-schema.sql
 └── scripts/
     ├── bootstrap.sh
@@ -334,7 +334,7 @@ For production, create a dedicated read-only principal instead of using `M73580`
 | `not in the list of allowed locations` | The table location from Tableflow isn't under `abfss://<container>@<account>.dfs.core.windows.net/`. Fix `AZURE_STORAGE_*` and recreate the catalog |
 | `AADSTS...` errors in logs | Wrong tenant or SP credentials, an expired secret, or the managed identity isn't enabled |
 | `403 AuthorizationPermissionMismatch` | Polaris identity lacks `Storage Blob Data Contributor` (or role propagation is still pending), or HNS ACLs block the path |
-| No `adls.sas-token.*` keys | Credential vending isn't active. Check the flags in `polaris/application.properties` and the allowed locations |
+| No `adls.sas-token.*` keys | Credential vending isn't active. Check the flags in `configs/polaris/application.properties` and the allowed locations |
 
 Useful commands:
 ```bash
