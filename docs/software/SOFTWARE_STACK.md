@@ -1,23 +1,24 @@
 # Apache Polaris Deployment Software and Framework Inventory
 
 **Author:** Angel Vega  
-**Date:** 2026-11-21
+**Date:** 2026-11-24
 
 This document describes the software and frameworks used by the Apache Polaris
-1.8.0 deployment in this repository.
+deployment in this repository. Compose tracks the latest official server and
+Admin Tool images.
 
 ## Core Application
 
 | Component | Version / implementation | Purpose |
 |---|---|---|
-| Apache Polaris | 1.8.0 | Iceberg REST catalog, management API, authorization, credential vending, and external catalog federation |
+| Apache Polaris | `latest` official Docker tag | Iceberg REST catalog, management API, authorization, credential vending, and external catalog federation |
 | Java | OpenJDK 21 | Runtime for the Polaris server and Admin Tool |
 | JVM base image | Red Hat UBI 9 OpenJDK 21 runtime | Container runtime for Polaris Java applications |
-| Quarkus | 3.39.3 | Java application framework and runtime |
-| Apache Iceberg | 1.11.0 | Iceberg catalog APIs and table metadata implementation |
+| Quarkus | 3.40.1.2 in Polaris 1.9.0 | Java application framework and runtime |
+| Apache Iceberg | 1.12.0 in Polaris 1.9.0 | Iceberg catalog APIs and table metadata implementation |
 
-The official `apache/polaris:1.8.0` and
-`apache/polaris-admin-tool:1.8.0` images contain the JVM runtime. A separate
+The official `apache/polaris:latest` and
+`apache/polaris-admin-tool:latest` images contain the JVM runtime. A separate
 Java installation is not required on the Azure VM.
 
 ## Container and Operating Environment
@@ -36,8 +37,8 @@ The containers are isolated from the host Java and Python environments.
 | Component | Version / implementation | Purpose |
 |---|---|---|
 | PostgreSQL | `postgres:17-alpine` | Durable Polaris metastore |
-| PostgreSQL JDBC driver | 42.7.13 | JDBC connection from Polaris to PostgreSQL |
-| Polaris relational JDBC persistence | 1.8.0 implementation | Stores catalogs, namespaces, tables, principals, roles, grants, and policies |
+| PostgreSQL JDBC driver | 42.7.14 in Polaris 1.9.0 | JDBC connection from Polaris to PostgreSQL |
+| Polaris relational JDBC persistence | Latest official Polaris implementation | Stores catalogs, namespaces, tables, principals, roles, grants, and policies |
 | PostgreSQL Alpine image | Rolling PostgreSQL 17 patch release | Small production-capable database container |
 
 PostgreSQL database: `POLARIS`

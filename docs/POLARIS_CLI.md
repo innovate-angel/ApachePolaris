@@ -30,7 +30,7 @@ python3 -m pip install apache-polaris
 ```
 
 The CLI does not need to be installed inside the
-`apache/polaris:1.8.0` container. Installing it on the VM or an administrator
+`apache/polaris:latest` container. Installing it on the VM or an administrator
 workstation is simpler and keeps credentials outside the server container.
 
 ### Docker alternative
@@ -97,10 +97,23 @@ Supported global options include:
 --realm REALM
 --header HEADER
 --profile PROFILE
+--ssl-ca-cert SSL_CA_CERT
+--insecure
 --page-size PAGE_SIZE
 ```
 
 Use `--base-url` instead of combining `--host`, `--port`, and `--scheme`.
+
+For a private certificate authority, use `--ssl-ca-cert` rather than
+`--insecure`:
+
+```bash
+polaris \
+  --base-url https://polaris.example.com \
+  --realm ISBUS \
+  --ssl-ca-cert /path/to/private-ca.pem \
+  catalogs list
+```
 
 ## Client Profiles
 

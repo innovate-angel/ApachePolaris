@@ -1,9 +1,9 @@
 # Installing Apache Polaris (container) on an Azure VM
 
 **Author:** Angel Vega  
-**Date:** 2026-11-21
+**Date:** 2026-11-24
 
-Step-by-step instructions to deploy open-source Apache Polaris 1.8.0 with
+Step-by-step instructions to deploy the latest open-source Apache Polaris release (1.9.0 as of 2026-11-24) with
 Docker Compose on an Azure Linux VM and federate it to the Confluent Cloud
 Tableflow Iceberg REST catalog, with Azure ADLS Gen2 access for table files.
 
@@ -15,21 +15,41 @@ For CLI installation and administration, see
 ## 0. What you end up with
 
 ```
- Iceberg clients ──► nginx/Azure ingress :443 ──► Polaris :8181 (this VM)
-                                               │   │
-                                               │   └──► Postgres (container, internal only)
-                                               │
-                          ┌────────────────────┴──────────────────────┐
-                          ▼                                           ▼
-  direct HTTPS or nginx egress ──► https://tableflow.eastus2.azure.confluent.cloud    ADLS Gen2 (abfss://)
-  (Polaris egress)        Tableflow Iceberg REST catalog                     Tableflow BYOS container
+ Google BigQuery / Microsoft Fabric / Amazon Redshift /
+ Amazon SageMaker Unified Studio / Dremio / ThoughtSpot /
+ Starburst / MotherDuck
+                    │
+                    │ HTTPS REST read requests
+                    ▼
+       Apache Polaris :8181 (Azure VM)
+                    │
+          ┌─────────┼────────────────────────┐
+          │         │                        │
+          ▼         │ PULL / federation via  │
+  PostgreSQL :5432 │ HTTPS REST             │
+  Polaris metadata, └────────────────────► Tableflow
+  realms, RBAC                            Confluent Iceberg
+                                           master catalog
+                                                 │
+                                                 │ Read/write
+                                                 ▼
+                                         ADLS Gen2 storage account
+                                         BYOS container
+                                         (Iceberg data files)
+                                                 ▲
+                                                 │
+       Apache Polaris direct read access / credential vending
+       (Azure managed identity or service principal)
 ```
 
 | Container  | Image                              | Ports on the VM            |
 |------------|------------------------------------|----------------------------|
 | `postgres` | `postgres:17-alpine`               | none (internal only)       |
-| `polaris`  | `apache/polaris:1.8.0`             | `8181` (API), `127.0.0.1:8182` (health) |
-| `polaris-bootstrap` (one-off) | `apache/polaris-admin-tool:1.8.0` | none           |
+| `polaris`  | `apache/polaris:latest`             | `8181` (API), `127.0.0.1:8182` (health) |
+| `polaris-bootstrap` (one-off) | `apache/polaris-admin-tool:latest` | none           |
+
+Official current release documentation:
+https://polaris.apache.org/releases/1.9.0/
 
 Federation means Polaris forwards catalog calls **live** to Tableflow. Nothing
 is copied. Tables are read-only, and Tableflow stays the owner. Polaris adds
@@ -227,11 +247,22 @@ docker compose ps                     # wait until postgres is "healthy"
 
 ./scripts/bootstrap.sh                # one-time: creates realm ISBUS + M73580 administrator
 ```
-Expected output: `Realm 'POLARIS' successfully bootstrapped.` If you run it
+Expected output: `Realm 'ISBUS' successfully bootstrapped.` If you run it
 again, it reports that the realm is already bootstrapped and exits cleanly.
 
+Every `--realm` passed to the Admin Tool must have a matching
+`--credential=realm,clientId,clientSecret`. Do not omit
+`POLARIS_ROOT_CLIENT_SECRET`: without an explicit credential, bootstrap can
+create an inaccessible principal with a random secret that is not reported.
+
 The schema script in `postgres/initdb/` only runs the **first** time the
-Postgres volume is created.
+Postgres volume is created. Polaris 1.9.0 uses one versioned
+`schema.sql` script for PostgreSQL and validates the metastore schema version
+before accepting realm requests.
+
+The Compose datasource sets `currentSchema=POLARIS_SCHEMA` explicitly for both
+the Admin Tool and server. This prevents an upgrade or bootstrap from selecting
+a different schema accidentally.
 
 ---
 
@@ -244,7 +275,7 @@ curl -s http://127.0.0.1:8182/q/health | jq .status     # "UP"
 docker compose logs polaris --tail 50
 ```
 
-Look for `polaris-server 1.8.0 ... started` and `Listening on http://0.0.0.0:8181`.
+Look for the Polaris server startup line and `Listening on http://0.0.0.0:8181`.
 
 ---
 
@@ -364,13 +395,14 @@ docker compose exec -T postgres pg_dump -U M73581 POLARIS > polaris-$(date +%F).
 docker compose exec -T postgres psql -U M73581 -d POLARIS < polaris-YYYY-MM-DD.sql
 ```
 
-**Upgrade Polaris**: change the image tags for `apache/polaris` and
+**Upgrade Polaris**: update `latest` or replace it with an approved release tag for `apache/polaris` and
 `apache/polaris-admin-tool` in `docker-compose.yml`, take a backup, then:
 ```bash
 docker compose pull && docker compose up -d
 ```
-Read the Polaris release notes for any required schema migration before you
-upgrade.
+Read the Polaris release notes and apply any schema migrations **before**
+starting the new server binary. Polaris 1.9.0+ expects a matching SQL schema
+version and fails fast with an actionable error when it does not match.
 
 **Rotate secrets**
 - Tableflow API key: update `.env`, delete the catalog, and rerun step 8.
