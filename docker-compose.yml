@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: POLARIS
       POSTGRES_USER: ${POSTGRES_USER:-M73581}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the deployment environment}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
@@ -33,11 +33,11 @@ services:
       QUARKUS_DATASOURCE_JDBC_MIN_SIZE: "2"
       QUARKUS_DATASOURCE_JDBC_MAX_SIZE: "20"
       QUARKUS_DATASOURCE_USERNAME: ${POSTGRES_USER:-M73581}
-      QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the deployment environment}
       QUARKUS_OTEL_SDK_DISABLED: "true"
     command: >
       bootstrap --realm=${POLARIS_REALM:-ISBUS}
-      --credential=POLARIS,${POLARIS_ROOT_CLIENT_ID:-M73580},${POLARIS_ROOT_CLIENT_SECRET:?Set POLARIS_ROOT_CLIENT_SECRET in .env}
+      --credential=POLARIS,${POLARIS_ROOT_CLIENT_ID:-M73580},${POLARIS_ROOT_CLIENT_SECRET:?Set POLARIS_ROOT_CLIENT_SECRET in the deployment environment}
 
   polaris:
     image: apache/polaris:latest
@@ -59,14 +59,14 @@ services:
       QUARKUS_DATASOURCE_JDBC_MIN_SIZE: "2"
       QUARKUS_DATASOURCE_JDBC_MAX_SIZE: "20"
       QUARKUS_DATASOURCE_USERNAME: ${POSTGRES_USER:-M73581}
-      QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the deployment environment}
       POLARIS_REALM_CONTEXT_REALMS: ${POLARIS_REALM:-ISBUS}
       QUARKUS_OTEL_SDK_DISABLED: "true"
       # Azure identity used for ADLS credential vending (optional at startup)
       AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
       AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
       AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
-      POLARIS_TOKEN_BROKER_SECRET: ${POLARIS_TOKEN_BROKER_SECRET:?Set POLARIS_TOKEN_BROKER_SECRET in .env}
+      POLARIS_TOKEN_BROKER_SECRET: ${POLARIS_TOKEN_BROKER_SECRET:?Set POLARIS_TOKEN_BROKER_SECRET in the deployment environment}
     volumes:
       - ./configs/polaris/application.properties:/deployments/config/application.properties:ro
     healthcheck:

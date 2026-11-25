@@ -70,15 +70,17 @@ There is no proxy in the request path.
 
 ```bash
 git clone <this repo> && cd ApachePolaris
-cp .env.example .env && editor .env     # fill in all values
 
-docker compose up -d postgres
-./scripts/bootstrap.sh                  # one-off: creates realm ISBUS + service_admin
-docker compose up -d                    # polaris on :8181
+# On an Azure VM, export configuration values, authenticate to Key Vault with
+# the attached managed identity, and deploy with transient environment variables.
+export VAULT_NAME="<key-vault-name>"
+export IDENTITY_CLIENT_ID="<user-assigned-managed-identity-client-id>"
+export AZURE_TENANT_ID="<tenant-id>"
+export AZURE_CLIENT_ID="<polaris-service-principal-app-id>"
+export AZURE_STORAGE_ACCOUNT="<storage-account>"
+export AZURE_STORAGE_CONTAINER="<tableflow-container>"
 
-./scripts/check-tableflow.sh            # sanity: direct Tableflow access, without Polaris
-./scripts/setup-tableflow-federation.sh # creates EXTERNAL catalog + role/grant for M73580
-./scripts/verify.sh                     # token -> config -> namespaces -> loadTable (SAS check)
+./scripts/deploy-from-key-vault.sh
 ```
 
 ## Troubleshooting

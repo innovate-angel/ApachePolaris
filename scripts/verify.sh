@@ -5,7 +5,10 @@
 # Requires curl + jq. Set CURL_INSECURE=1 for self-signed certs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-source .env
+
+for v in POLARIS_ROOT_CLIENT_ID POLARIS_ROOT_CLIENT_SECRET; do
+  [[ -n "${!v:-}" ]] || { echo "ERROR: $v is not set in the environment"; exit 1; }
+done
 
 REALM="${POLARIS_REALM:-ISBUS}"
 CURL=(curl -sS)

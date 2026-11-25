@@ -200,37 +200,36 @@ docker version && docker compose version
 
 ---
 
-## 4. Configure `.env`
+## 4. Configure Azure Key Vault and deployment variables
 
 ```bash
 cd ~/ApachePolaris
-cp .env.example .env
-chmod 600 .env
-nano .env
 ```
 
-| Variable | What to set |
-|----------|-------------|
-| `POSTGRES_USER` | `M73581` (PostgreSQL application role) |
-| `POSTGRES_PASSWORD` | Strong password |
-| `POLARIS_ROOT_CLIENT_ID` | `M73580` (the Polaris bootstrap administrator) |
-| `POLARIS_ROOT_CLIENT_SECRET` | Strong password for the `M73580` principal |
-| `POLARIS_TOKEN_BROKER_SECRET` | Output of `openssl rand -base64 48` |
-| `POLARIS_PUBLIC_HOSTNAME` | Optional, informational only |
-| `AZURE_TENANT_ID` | **Required**: tenant of the storage account |
-| `AZURE_CLIENT_ID` | Service principal `appId` |
-| `AZURE_CLIENT_SECRET` | Service principal `password` |
-| `AZURE_STORAGE_ACCOUNT` | ADLS Gen2 account name (no domain) |
-| `AZURE_STORAGE_CONTAINER` | Tableflow BYOS container name |
-| `TABLEFLOW_PROXY_BASE_URL` | Direct Tableflow base URL `https://tableflow.eastus2.azure.confluent.cloud`, with no trailing slash |
-| `TABLEFLOW_ORG_ID` | `54c99051-8b33-4f51-b105-132f643b1720` (prefilled) |
-| `TABLEFLOW_ENV_ID` | `env-xq8wnq` (prefilled) |
-| `TABLEFLOW_API_KEY` / `TABLEFLOW_API_SECRET` | Tableflow-scoped Confluent API key and secret |
-| `TABLEFLOW_OAUTH_SCOPE` | Leave empty unless Tableflow requires a scope |
-| `TABLEFLOW_REMOTE_CATALOG_NAME` | Leave empty |
-| `TABLEFLOW_CATALOG_URI` / `TABLEFLOW_TOKEN_URI` | Leave empty (derived automatically) |
-| `POLARIS_CATALOG_NAME` | `tableflow` (name of the catalog inside Polaris) |
-| `POLARIS_ADMIN_CATALOG_ROLE` | `tableflow_reader` (default is fine) |
+Store secrets in Key Vault under the names in
+`docs/AZURE_KEY_VAULT_SHARED_IDENTITY.md`. Export non-secret configuration
+variables in the deployment shell:
+
+```bash
+export VAULT_NAME="<key-vault-name>"
+export IDENTITY_CLIENT_ID="<shared-managed-identity-client-id>"
+export POSTGRES_USER="M73581"
+export POLARIS_ROOT_CLIENT_ID="M73580"
+export POLARIS_REALM="ISBUS"
+export AZURE_TENANT_ID="<tenant-id>"
+export AZURE_CLIENT_ID="<storage-service-principal-app-id>"
+export AZURE_STORAGE_ACCOUNT="<storage-account>"
+export AZURE_STORAGE_CONTAINER="tableflow"
+export TABLEFLOW_PROXY_BASE_URL="https://tableflow.eastus2.azure.confluent.cloud"
+export TABLEFLOW_ORG_ID="<tableflow-org-id>"
+export TABLEFLOW_ENV_ID="<tableflow-env-id>"
+```
+
+Deploy with the transient Key Vault environment:
+
+```bash
+./scripts/deploy-from-key-vault.sh
+```
 
 The derived URLs that Polaris uses are:
 ```
@@ -248,12 +247,7 @@ docker compose config -q && echo "compose config OK"
 ## 5. Start Postgres and bootstrap Polaris
 
 ```bash
-docker compose pull
-docker compose --profile bootstrap pull polaris-bootstrap
-docker compose up -d postgres
-docker compose ps                     # wait until postgres is "healthy"
-
-./scripts/bootstrap.sh                # one-time: creates realm ISBUS + M73580 administrator
+./scripts/deploy-from-key-vault.sh
 ```
 Expected output: `Realm 'ISBUS' successfully bootstrapped.` If you run it
 again, it reports that the realm is already bootstrapped and exits cleanly.

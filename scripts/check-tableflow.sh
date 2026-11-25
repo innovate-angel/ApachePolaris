@@ -4,10 +4,9 @@
 # Requires curl + jq. Set CURL_INSECURE=1 for self-signed certs (testing only).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-source .env
 
 for v in TABLEFLOW_PROXY_BASE_URL TABLEFLOW_ORG_ID TABLEFLOW_ENV_ID TABLEFLOW_API_KEY TABLEFLOW_API_SECRET; do
-  [[ -n "${!v:-}" ]] || { echo "ERROR: $v is not set in .env"; exit 1; }
+  [[ -n "${!v:-}" ]] || { echo "ERROR: $v is not set in the environment"; exit 1; }
 done
 
 CURL=(curl -fsS)
