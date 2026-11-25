@@ -9,8 +9,9 @@ This directory defines one document per deployment test case.
 
 | Level | Command | Purpose |
 |---|---|---|
-| Unit/static | `make test-unit` | Repository structure, configuration syntax, required files |
+| Unit/static | `make test-unit` | Repository structure, configuration syntax, required files, and `verify.sh` pass/fail behaviour against a stub server |
 | Integration | `make test-integration` | Live Docker, health, OAuth, and authentication checks |
+| Restart | `make test-restart` | Starts an isolated copy of the stack (own Compose project and volume, loopback ports `18181`/`18182`, no Azure or Confluent access), restarts Polaris, and checks that the setup script restores the federated catalog and its roles and grants |
 | E2E | `make test-e2e` | Tableflow federation and credential vending |
 
 External Tableflow/Azure credentials are required for E2E tests. Run them

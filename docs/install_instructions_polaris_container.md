@@ -291,9 +291,17 @@ From `~/ApachePolaris`, keeping the exports from section 4:
 The script loads secrets in its own process, starts `postgres:17-alpine`,
 bootstraps the realm with `apache/polaris-admin-tool:1.9.0`, waits for
 `apache/polaris:1.9.0` to be healthy, checks direct Tableflow access, creates
-the federated catalog, and runs verification. Compose pulls missing images
-automatically. On a fresh volume, the Postgres init script creates the SQL
-schema and the matching Polaris Admin Tool creates its tables.
+or repairs the federated catalog, and runs verification. Compose pulls missing
+images automatically. On a fresh volume, the Postgres init script creates the
+SQL schema and the matching Polaris Admin Tool creates its tables.
+
+The script's exit status says what was proven:
+
+| Exit status | Last line | Meaning |
+|---|---|---|
+| `0` | `All checks passed.` | A table loaded through Polaris, it is in the expected ADLS account and container, and Polaris vended SAS credentials for it |
+| `3` | `INCONCLUSIVE: ...` | Everything is deployed, but Tableflow has published no table yet, so credential vending is unproven |
+| Any other | `ERROR: ...` or `FAILED: ...` | That step failed; fix the cause and rerun |
 
 ```bash
 ./scripts/compose.sh ps
@@ -301,43 +309,119 @@ curl -fsS http://127.0.0.1:8182/q/health | jq -e '.status == "UP"'
 ```
 
 Both `postgres` and `polaris` should be healthy. The one-off Admin Tool is not
-a running service. In the deployment output, look for a loaded table under the
-expected ADLS account/container and a non-empty `sasKeys` list. A green
-health check, `All checks passed.` without SAS keys, or a successful exit
-with `No namespaces` or `No tables` **does not** prove data access. If the
-table hasn't materialized yet, check Tableflow, then rerun verification:
+a running service. A green health check alone proves none of the above. After
+an `INCONCLUSIVE` result, check Tableflow, wait for a table to materialize,
+then rerun verification until it exits `0`:
 
 ```bash
 (set -e; source scripts/load-key-vault-env.sh; ./scripts/verify.sh)
 ```
 
-You can rerun deployment after fixing a failed step without removing the
-database volume. It does not update the credentials or URL of a previously
-created external catalog. Use an approved catalog update or rotation procedure
-if those values change.
+You can rerun the deployment at any time without removing the database volume;
+it is also how restarts and secret changes are applied (section 7). When the
+catalog's Tableflow settings have changed or its connection has stopped
+working, the rerun recreates the catalog and restores its catalog roles,
+grants, and role assignments.
 
 ## 6. Connect a query engine — after local verification
 
+### 6.1 Put the TLS gateway in front of Polaris
+
 1. Configure the approved gateway with an HTTPS listener on `443`, the
    certificate matching the client-facing hostname, and an HTTP backend
-   pointing to `<vm-private-ip>:8181`. Preserve `/api/catalog` and authorize
-   the gateway's source subnet/IPs in the VM NSG. Configure the gateway's
-   health probe for port `8181` (TCP where supported, otherwise an appropriate
-   HTTP endpoint/status). Do not open the VM-only `8182` health port.
-2. Create a dedicated Polaris principal with read access to the federated
-   catalog using the [Polaris administration guide](./POLARIS_CLI.md). Do not
-   give a query engine the bootstrap administrator's credentials.
-3. On an Iceberg REST-capable query engine with Azure storage support, set
-   the catalog URI to `https://<gateway-hostname>/api/catalog` and the OAuth
-   token endpoint to `https://<gateway-hostname>/api/catalog/v1/oauth/tokens`.
-   Set the warehouse to `tableflow` and OAuth scope to `PRINCIPAL_ROLE:ALL`.
-   Send the headers `Polaris-Realm: ISBUS` and
-   `X-Iceberg-Access-Delegation: vended-credentials`. Use the read principal's
-   client ID and secret from the engine's secret store.
-4. List the namespaces and tables, then run a small read (such as
-   `SELECT * FROM <catalog>.<namespace>.<table> LIMIT 1`) against the known
-   materialized table. A successful read verifies the client-to-gateway
-   connection **and** the client-to-ADLS data path.
+   pointing to `<vm-private-ip>:8181`. Preserve the `/api/catalog` path and
+   authorize the gateway's source subnet/IPs for `8181` in the VM NSG.
+2. Configure the health probe as an HTTP `GET /api/catalog/v1/config` on port
+   `8181` that treats status `401` as healthy (in Azure Application Gateway: a
+   custom probe with the status code match set to `401`). A working Polaris
+   answers an unauthenticated request to that path with `401`, so the probe
+   needs no credentials. If the gateway can only accept `2xx`/`3xx`, use a TCP
+   probe on `8181` instead. Do not open the VM-only `8182` health port; the
+   probe shows that Polaris is serving, while database health stays visible on
+   the VM at `http://127.0.0.1:8182/q/health`.
+3. From a machine that reaches the gateway, confirm the route and the
+   certificate. Expect `401`, with no certificate warning and without `-k`:
+
+   ```bash
+   curl -sS -o /dev/null -w '%{http_code}\n' https://<gateway-hostname>/api/catalog/v1/config
+   ```
+
+### 6.2 Create a read-only principal for the engine
+
+On the VM, from `~/ApachePolaris` with the section 4 exports, create one
+principal per query engine:
+
+```bash
+(set -e; source scripts/load-key-vault-env.sh; ./scripts/create-reader-principal.sh '<engine-principal-name>')
+```
+
+The script creates the principal, puts it in the `tableflow_readers` principal
+role, and grants that role the `tableflow_read_only` catalog role. The
+principal can list and describe namespaces and tables and load tables with
+vended read credentials; creating, altering, or dropping anything and the
+management API are denied. The output ends with the principal's **client ID
+and client secret, shown only once**: put them in the engine's secret store
+immediately. Rerunning the script for an existing principal re-checks its
+access and leaves its credentials unchanged; section 7 covers issuing a new
+secret.
+
+Do not give a query engine the bootstrap administrator's credentials, and do
+not grant it the `tableflow_reader` catalog role: despite its name, that role
+carries `CATALOG_MANAGE_CONTENT` and exists for the deployment's own
+verification.
+
+### 6.3 Configure the engine
+
+Use an Iceberg REST-capable engine with Azure storage support and these
+settings:
+
+| Setting | Value |
+|---|---|
+| Catalog URI | `https://<gateway-hostname>/api/catalog` |
+| Warehouse | `tableflow` |
+| OAuth credential | `<client-id>:<client-secret>` from section 6.2, read from the engine's secret store |
+| OAuth scope | `PRINCIPAL_ROLE:ALL` |
+| OAuth token endpoint | `https://<gateway-hostname>/api/catalog/v1/oauth/tokens`; Iceberg clients derive it from the catalog URI, so set it only if the engine asks for it |
+| Header `X-Iceberg-Access-Delegation` | `vended-credentials` |
+| Header `Polaris-Realm` | `ISBUS`. Polaris falls back to this realm when the header is absent, so an engine that cannot send custom headers still works |
+
+For example, Spark 3.5 with Iceberg 1.12.0 (match the runtime artifact to the
+engine's Spark and Scala versions):
+
+```bash
+spark-sql \
+  --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.12.0,org.apache.iceberg:iceberg-azure-bundle:1.12.0 \
+  --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
+  --conf spark.sql.catalog.tableflow=org.apache.iceberg.spark.SparkCatalog \
+  --conf spark.sql.catalog.tableflow.catalog-impl=org.apache.iceberg.rest.RESTCatalog \
+  --conf spark.sql.catalog.tableflow.uri=https://<gateway-hostname>/api/catalog \
+  --conf spark.sql.catalog.tableflow.warehouse=tableflow \
+  --conf spark.sql.catalog.tableflow.credential="${POLARIS_CLIENT_ID}:${POLARIS_CLIENT_SECRET}" \
+  --conf spark.sql.catalog.tableflow.scope=PRINCIPAL_ROLE:ALL \
+  --conf spark.sql.catalog.tableflow.token-refresh-enabled=true \
+  --conf spark.sql.catalog.tableflow.header.X-Iceberg-Access-Delegation=vended-credentials \
+  --conf spark.sql.catalog.tableflow.header.Polaris-Realm=ISBUS \
+  --conf spark.redaction.regex='(?i)secret|password|token|access[.]?key|credential'
+```
+
+### 6.4 Prove the read path
+
+1. List the namespaces and tables, then run a small read against the known
+   materialized table:
+
+   ```sql
+   SHOW NAMESPACES IN tableflow;
+   SELECT * FROM tableflow.`<namespace>`.`<table>` LIMIT 1;
+   ```
+
+   A returned row verifies the client-to-gateway connection **and** the
+   client-to-ADLS data path with vended credentials.
+2. Confirm the principal is read-only. This statement must be rejected as
+   forbidden:
+
+   ```sql
+   CREATE NAMESPACE tableflow.must_be_rejected;
+   ```
 
 ## 7. Troubleshooting and operations
 
@@ -351,15 +435,123 @@ if those values change.
 | Polaris unhealthy | Check `./scripts/compose.sh logs --tail 100 postgres polaris` and verify database credentials and the token-broker signing key |
 | Tableflow `401` or `403` | Confirm the API key is Tableflow-scoped, current, and authorized for this environment |
 | Tableflow `404` or TLS error | Compare the derived URL to the Confluent REST endpoint and check DNS, egress, and certificate trust |
-| No SAS keys or ADLS `403` | Check the Polaris service principal's storage-account role, networking and ACLs, the vending flags in `configs/polaris/application.properties`, and the catalog's allowed location |
+| Verification fails with `vended no ADLS SAS credentials`, or ADLS `403` | Check the Polaris service principal's client secret (not expired), its storage-account role, networking and ACLs, the vending flags in `configs/polaris/application.properties`, and the catalog's allowed location |
+| Requests through the `tableflow` catalog return HTTP `500` `NullPointerException` | Polaris restarted and lost the Tableflow secret. Rerun `./scripts/deploy-from-key-vault.sh` (see below) |
+| Deployment ends with `INCONCLUSIVE` and exit status `3` | Tableflow has published no table yet. Check the topic's Tableflow status, then rerun verification (section 5) |
+| Deployment stops with `could not be restored` | A catalog role, grant, or assignment could not be put back after the catalog was recreated. Fix the reported cause and rerun the deployment; the record it retries from is under `~/.local/state/polaris/` |
 
 In a new SSH session, re-export the non-secret settings from section 4 and
 change to `~/ApachePolaris` before running Compose operations.
 
 ```bash
 ./scripts/compose.sh logs --tail 100 polaris
-./scripts/compose.sh restart polaris
 ```
+
+### After any Polaris restart
+
+Polaris 1.9.0 keeps the catalog's Tableflow client secret in memory only.
+Whenever the Polaris container restarts (a manual restart, a VM reboot, a
+Docker Engine upgrade, or a crash), the `tableflow` catalog stays listed but
+every request through it fails with HTTP `500` until the connection is
+re-established. Polaris cannot update a catalog's connection in place, so the
+deployment script recreates the catalog and restores its catalog roles, grants,
+and role assignments. Principals and their credentials are not touched. The
+catalog is missing for a few seconds while this happens; engine queries in that
+window fail and can be retried.
+
+To restart Polaris deliberately:
+
+```bash
+./scripts/compose.sh restart polaris
+./scripts/deploy-from-key-vault.sh
+```
+
+Nothing reruns the deployment after an unplanned restart. Rerun it after every
+VM reboot and Docker upgrade, and check the catalog at any time with:
+
+```bash
+(set -e; source scripts/load-key-vault-env.sh; ./scripts/verify.sh)
+```
+
+### Rotate secrets
+
+Add the new value as a new version of the same Key Vault secret, then rerun
+`./scripts/deploy-from-key-vault.sh`. The rerun recreates the containers whose
+values changed, re-establishes the Tableflow connection, and verifies. A
+Compose `restart` does not load new values into a container. PostgreSQL and
+Polaris each store one of the secrets themselves, so those two need a step on
+the VM before the rerun:
+
+| Key Vault secret | Before the rerun | What the rerun does, and what to expect |
+|---|---|---|
+| `polaris-postgres-password` | Run **Set the database password** below | Recreates both containers, a brief outage. Without the step, the rerun stops at bootstrap with `password authentication failed` |
+| `polaris-root-client-secret` | Keep the previous version enabled, then run **Set the administrator secret** below | Recreates nothing. Without the step, the rerun stops with `token request failed`; Polaris and the query engines keep working. Disable the previous version afterwards |
+| `polaris-token-broker-secret` | Nothing | Recreates Polaris. Every token issued before is rejected with `401`, so engines must authenticate again |
+| `polaris-azure-client-secret` | Create the new client secret in Entra and leave the old one in place | Recreates Polaris. Once the rerun ends with `All checks passed.`, delete the old client secret in Entra. Entra client secrets expire: record the date and rotate before it, because credential vending stops when it passes |
+| `polaris-tableflow-api-key` and `polaris-tableflow-api-secret` | Create the new Tableflow-scoped key in Confluent and update both secrets together | Sees the new key ID and recreates the catalog, keeping its roles and grants. Then delete the old key in Confluent |
+
+**Set the database password** to the current Key Vault value. Expect the
+output `ALTER ROLE`:
+
+```bash
+(
+  set -euo pipefail
+  source scripts/load-key-vault-env.sh
+  NEW_POSTGRES_PASSWORD="$POSTGRES_PASSWORD" docker compose exec -T -e NEW_POSTGRES_PASSWORD postgres \
+    sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d POLARIS' <<'SQL'
+\set new_password `printf %s "$NEW_POSTGRES_PASSWORD"`
+ALTER ROLE CURRENT_USER PASSWORD :'new_password';
+SQL
+)
+```
+
+**Set the administrator secret** to the current Key Vault value. The block
+signs in with the previous enabled version and then replaces it; run a second
+time, it fails at the sign-in and changes nothing:
+
+```bash
+(
+  set -euo pipefail
+  source scripts/load-key-vault-env.sh
+  polaris=http://127.0.0.1:8181
+  previous_id="$(az keyvault secret list-versions --vault-name "$VAULT_NAME" \
+    --name polaris-root-client-secret \
+    --query 'sort_by([?attributes.enabled], &attributes.created)[-2].id' --output tsv)"
+  token="$(az keyvault secret show --id "$previous_id" --query value --output tsv |
+    tr -d '\n' |
+    curl -fsS -X POST "$polaris/api/catalog/v1/oauth/tokens" -H "Polaris-Realm: $POLARIS_REALM" \
+      --data-urlencode grant_type=client_credentials \
+      --data-urlencode "client_id=$POLARIS_ROOT_CLIENT_ID" \
+      --data-urlencode client_secret@- \
+      --data-urlencode scope=PRINCIPAL_ROLE:ALL | jq -r .access_token)"
+  jq -n --arg secret "$POLARIS_ROOT_CLIENT_SECRET" '{clientSecret: $secret}' |
+    curl -fsS -o /dev/null -X POST "$polaris/api/management/v1/principals/root/reset" \
+      -H "Authorization: Bearer $token" -H "Polaris-Realm: $POLARIS_REALM" \
+      -H 'Content-Type: application/json' -d @-
+)
+```
+
+**Query engine principals** from section 6.2 are not in Key Vault. This issues
+a new secret for one and prints it once; the old secret stops working
+immediately, so update the engine's secret store right away:
+
+```bash
+(
+  set -euo pipefail
+  source scripts/load-key-vault-env.sh
+  polaris=http://127.0.0.1:8181
+  token="$(printf %s "$POLARIS_ROOT_CLIENT_SECRET" |
+    curl -fsS -X POST "$polaris/api/catalog/v1/oauth/tokens" -H "Polaris-Realm: $POLARIS_REALM" \
+      --data-urlencode grant_type=client_credentials \
+      --data-urlencode "client_id=$POLARIS_ROOT_CLIENT_ID" \
+      --data-urlencode client_secret@- \
+      --data-urlencode scope=PRINCIPAL_ROLE:ALL | jq -r .access_token)"
+  curl -fsS -X POST "$polaris/api/management/v1/principals/<engine-principal-name>/reset" \
+    -H "Authorization: Bearer $token" -H "Polaris-Realm: $POLARIS_REALM" | jq .credentials
+)
+```
+
+### Backup and upgrade
 
 Back up the metastore to an approved location and protect the backup like a
 secret. For example, with the default database user:
@@ -372,7 +564,5 @@ secret. For example, with the default database user:
 For an upgrade, take a backup, follow the versioned
 [JDBC metastore migration instructions](https://polaris.apache.org/releases/1.9.0/metastores/relational-jdbc/#upgrading-polaris),
 and update both Polaris image tags together. Do not start a new release until
-any required database migration is applied. A Compose `restart` does not load
-new environment values into a container. Rotate secrets in their issuing
-system and Key Vault, then apply the appropriate catalog update or container
-recreation. Never run `down -v` on data you intend to keep.
+any required database migration is applied. Never run `down -v` on data you
+intend to keep.

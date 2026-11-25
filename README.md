@@ -127,4 +127,12 @@ print the resolved Compose configuration.
 - Use `scripts/compose.sh` for Compose operations so required secrets are loaded
   transiently from Key Vault (export the non-secret deployment settings first):
   `./scripts/compose.sh logs -f polaris`
+- **After any Polaris restart** (manual, VM reboot, Docker upgrade), rerun
+  `./scripts/deploy-from-key-vault.sh`. Polaris 1.9.0 keeps the catalog's
+  Tableflow secret in memory only, so requests through the catalog fail with
+  HTTP 500 until the script recreates it; catalog roles and grants are kept.
+- **Secret rotation**: follow the per-secret table in the
+  [runbook](docs/install_instructions_polaris_container.md#rotate-secrets).
+- **Query engine access**: `scripts/create-reader-principal.sh <name>` creates
+  a read-only principal (runbook section 6.2).
 - **Backup**: `./scripts/compose.sh exec -T postgres pg_dump -U M73581 POLARIS > backup.sql`

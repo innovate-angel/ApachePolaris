@@ -1,0 +1,14 @@
+# Used only by tests/restart: an isolated copy of the stack on loopback ports.
+# Polaris listens on the published port so that http://localhost:<port> is the
+# same address from the host and from inside the container. The test federates
+# Polaris to a catalog it serves itself, as a stand-in for Tableflow.
+services:
+  polaris:
+    ports: !override
+      - "127.0.0.1:${POLARIS_TEST_PORT}:${POLARIS_TEST_PORT}"
+      - "127.0.0.1:${POLARIS_TEST_MGMT_PORT}:${POLARIS_TEST_MGMT_PORT}"
+    environment:
+      QUARKUS_HTTP_PORT: "${POLARIS_TEST_PORT}"
+      QUARKUS_MANAGEMENT_PORT: "${POLARIS_TEST_MGMT_PORT}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:${POLARIS_TEST_MGMT_PORT}/q/health || exit 1"]

@@ -192,8 +192,11 @@ unchanged.
 - Keep Key Vault RBAC authorization enabled; avoid legacy access policies.
 - Enable soft delete and purge protection on Key Vault.
 - Restrict Key Vault network access and authorize the VM's outbound route.
-- Rotate application secrets in Key Vault, then run the deployment entry point
-  or use `./scripts/compose.sh` to restart affected containers.
+- Rotate application secrets with the per-secret procedure in the
+  [installation runbook](./install_instructions_polaris_container.md#rotate-secrets).
+  Changing only the Key Vault value is not enough for the PostgreSQL password
+  or the administrator secret, and a Compose `restart` does not load new
+  values into a container.
 - Do not log secret values or run `docker compose config` with unrestricted
   output while secret environment variables are exported. The Compose wrapper
   only permits `config -q`.

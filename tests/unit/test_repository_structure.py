@@ -29,6 +29,7 @@ class RepositoryStructureTests(unittest.TestCase):
             "bootstrap.sh",
             "check-tableflow.sh",
             "compose.sh",
+            "create-reader-principal.sh",
             "deploy-from-key-vault.sh",
             "setup-tableflow-federation.sh",
             "verify.sh",
@@ -64,10 +65,6 @@ class RepositoryStructureTests(unittest.TestCase):
                        "setup-tableflow-federation.sh", "verify.sh"):
             self.assertIn(f"./scripts/{script}", text)
         self.assertNotIn("docker compose pull", text)
-
-    def test_verification_fails_on_http_error_responses(self):
-        text = (ROOT / "scripts/verify.sh").read_text()
-        self.assertIn("CURL=(curl -fsS)", text)
 
     def test_key_vault_compose_path_ignores_local_env_file(self):
         text = (ROOT / "scripts/load-key-vault-env.sh").read_text()
