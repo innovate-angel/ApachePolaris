@@ -29,7 +29,7 @@ identity to request the user-delegation key used to sign those tokens.
  Iceberg clients (Spark/Trino/Flink)
         │  Iceberg REST + OAuth
         ▼
-   direct :8181 access, restricted by NSG ─────────► polaris:8181 on this VM
+   HTTPS via TLS-terminating ingress ───────────────► polaris:8181 on this VM
         │                                            │
         │                                            ├── metadata/RBAC ──► postgres
         │                                            ├── direct HTTPS ───► Tableflow
@@ -46,11 +46,22 @@ Polaris and its helper scripts connect directly to
 outbound NSG rules, and any Azure NAT/firewall rules for that connection.
 There is no proxy in the request path.
 
+## Client TLS
+
+The Compose stack does not terminate TLS: Polaris listens on plaintext HTTP at
+port 8181. In production, terminate client HTTPS at an approved TLS gateway
+(for example, Azure Application Gateway or an organization-managed reverse
+proxy), and restrict the VM's inbound 8181 rule to that gateway. Clients should
+use the gateway's HTTPS hostname; do not expose plaintext 8181 to untrusted
+networks. Certificate provisioning and renewal belong to that gateway.
+
 ## Azure / Confluent prerequisites
 
-1. **VM**: Ubuntu 26.04 LTS + Docker Engine & compose plugin. Restrict SSH and
-   Polaris port 8181 to approved inbound networks. Allow direct outbound TCP
-   443 to Tableflow and required Azure endpoints.
+1. **VM**: Ubuntu 26.04 LTS + Docker Engine, Compose plugin, Azure CLI, Git,
+   curl, and jq. Restrict SSH and port 8181 to approved ingress networks.
+   Allow outbound DNS and TCP 443 to Tableflow, Key Vault, Microsoft Entra ID,
+   Azure Storage, and Docker Hub; managed-identity login also needs local
+   access to the Azure IMDS endpoint.
 2. **ADLS Gen2 storage account**: hierarchical namespace enabled, same region
    as the Kafka cluster; this is the Tableflow **BYOS** container. Tables in
    Confluent-managed storage cannot be read by Polaris.
@@ -64,30 +75,42 @@ There is no proxy in the request path.
 4. **Confluent**: a Confluent Cloud API key/secret **scoped to Tableflow** with
    access to the environment; Tableflow topics configured for BYOS into that
    ADLS container.
-5. Polaris realm bootstrap (this repo's `scripts/bootstrap.sh`).
+5. **Bootstrap identity and Key Vault**: attach a user-assigned managed identity
+   to the VM and grant it `Key Vault Secrets User` on the RBAC-enabled vault
+   containing the six deployment secrets.
 
 ## Deploy
 
 ```bash
 git clone <this repo> && cd ApachePolaris
 
-# On an Azure VM, export configuration values, authenticate to Key Vault with
-# the attached managed identity, and deploy with transient environment variables.
+# On an Azure VM, export non-secret configuration. The deploy entry point
+# authenticates with the attached managed identity and loads secrets transiently.
 export VAULT_NAME="<key-vault-name>"
 export IDENTITY_CLIENT_ID="<user-assigned-managed-identity-client-id>"
 export AZURE_TENANT_ID="<tenant-id>"
 export AZURE_CLIENT_ID="<polaris-service-principal-app-id>"
 export AZURE_STORAGE_ACCOUNT="<storage-account>"
 export AZURE_STORAGE_CONTAINER="<tableflow-container>"
+export TABLEFLOW_ORG_ID="<tableflow-org-id>"
+export TABLEFLOW_ENV_ID="<tableflow-env-id>"
 
 ./scripts/deploy-from-key-vault.sh
 ```
+
+This single command validates Compose configuration, starts PostgreSQL,
+bootstraps the realm, waits for Polaris health, checks direct Tableflow
+connectivity, creates the federated catalog, and runs verification. Compose
+uses the pinned Polaris release and fetches images only when they are missing.
+Secrets are fetched from Key Vault at runtime; do not put them in `.env` or
+print the resolved Compose configuration.
 
 ## Troubleshooting
 
 - **Catalog create fails**: Polaris could not reach/authenticate to Tableflow
   directly — the script prints the error body. Cross-check with
-  `./scripts/check-tableflow.sh` to isolate Tableflow connectivity vs Polaris issues.
+  `source scripts/load-key-vault-env.sh && ./scripts/check-tableflow.sh` to
+  isolate Tableflow connectivity vs Polaris issues.
 - **401 from Tableflow**: bad API key/secret, or the key isn't scoped to
   Tableflow / lacks access to the environment.
 - **403 AuthorizationPermissionMismatch** on ADLS: Polaris workload identity missing
@@ -101,5 +124,7 @@ export AZURE_STORAGE_CONTAINER="<tableflow-container>"
 
 ## Operations
 
-- **Backup**: `docker compose exec postgres pg_dump -U M73581 POLARIS > backup.sql`
-- **Logs**: `docker compose logs -f polaris`
+- Use `scripts/compose.sh` for Compose operations so required secrets are loaded
+  transiently from Key Vault (export the non-secret deployment settings first):
+  `./scripts/compose.sh logs -f polaris`
+- **Backup**: `./scripts/compose.sh exec -T postgres pg_dump -U M73581 POLARIS > backup.sql`

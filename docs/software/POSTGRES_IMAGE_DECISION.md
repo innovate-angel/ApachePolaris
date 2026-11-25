@@ -11,8 +11,8 @@ This deployment uses:
 image: postgres:17-alpine
 ```
 
-The PostgreSQL container provides the durable metastore for the latest Apache Polaris
-release. The image is a rolling PostgreSQL 17 tag based on Alpine Linux.
+The PostgreSQL container provides the durable metastore for the pinned Apache
+Polaris 1.9.0 release. The image is a rolling PostgreSQL 17 tag based on Alpine Linux.
 
 ## Rationale
 

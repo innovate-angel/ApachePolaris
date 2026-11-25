@@ -19,7 +19,7 @@ services:
     # intentionally not published to the host
 
   polaris-bootstrap:
-    image: apache/polaris-admin-tool:latest
+    image: apache/polaris-admin-tool:1.9.0
     profiles: ["bootstrap"]
     depends_on:
       postgres:
@@ -37,16 +37,16 @@ services:
       QUARKUS_OTEL_SDK_DISABLED: "true"
     command: >
       bootstrap --realm=${POLARIS_REALM:-ISBUS}
-      --credential=POLARIS,${POLARIS_ROOT_CLIENT_ID:-M73580},${POLARIS_ROOT_CLIENT_SECRET:?Set POLARIS_ROOT_CLIENT_SECRET in the deployment environment}
+      --credential=${POLARIS_REALM:-ISBUS},${POLARIS_ROOT_CLIENT_ID:-M73580},${POLARIS_ROOT_CLIENT_SECRET:?Set POLARIS_ROOT_CLIENT_SECRET in the deployment environment}
 
   polaris:
-    image: apache/polaris:latest
+    image: apache/polaris:1.9.0
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
     ports:
-      # Iceberg REST / management API. Restrict 8181 to approved clients in the NSG.
+      # Plain HTTP backend; restrict 8181 in the NSG to the TLS gateway.
       - "8181:8181"
       # management/health port exposed on localhost only
       - "127.0.0.1:8182:8182"

@@ -11,7 +11,7 @@ for v in POLARIS_ROOT_CLIENT_ID POLARIS_ROOT_CLIENT_SECRET; do
 done
 
 REALM="${POLARIS_REALM:-ISBUS}"
-CURL=(curl -sS)
+CURL=(curl -fsS)
 [[ "${CURL_INSECURE:-0}" == "1" ]] && CURL+=(-k)
 
 BASE="${POLARIS_URL:-http://localhost:8181}"

@@ -30,7 +30,7 @@ python3 -m pip install apache-polaris
 ```
 
 The CLI does not need to be installed inside the
-`apache/polaris:latest` container. Installing it on the VM or an administrator
+`apache/polaris:1.9.0` container. Installing it on the VM or an administrator
 workstation is simpler and keeps credentials outside the server container.
 
 ### Docker alternative

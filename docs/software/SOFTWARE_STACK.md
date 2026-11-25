@@ -4,21 +4,21 @@
 **Date:** 2026-11-24
 
 This document describes the software and frameworks used by the Apache Polaris
-deployment in this repository. Compose tracks the latest official server and
-Admin Tool images.
+deployment in this repository. Compose pins the Polaris server and Admin Tool
+to release 1.9.0; upgrades are deliberate.
 
 ## Core Application
 
 | Component | Version / implementation | Purpose |
 |---|---|---|
-| Apache Polaris | `latest` official Docker tag | Iceberg REST catalog, management API, authorization, credential vending, and external catalog federation |
+| Apache Polaris | `1.9.0` official Docker tag | Iceberg REST catalog, management API, authorization, credential vending, and external catalog federation |
 | Java | OpenJDK 21 | Runtime for the Polaris server and Admin Tool |
 | JVM base image | Red Hat UBI 9 OpenJDK 21 runtime | Container runtime for Polaris Java applications |
 | Quarkus | 3.40.1.2 in Polaris 1.9.0 | Java application framework and runtime |
 | Apache Iceberg | 1.12.0 in Polaris 1.9.0 | Iceberg catalog APIs and table metadata implementation |
 
-The official `apache/polaris:latest` and
-`apache/polaris-admin-tool:latest` images contain the JVM runtime. A separate
+The pinned `apache/polaris:1.9.0` and
+`apache/polaris-admin-tool:1.9.0` images contain the JVM runtime. A separate
 Java installation is not required on the Azure VM.
 
 ## Container and Operating Environment
@@ -26,7 +26,7 @@ Java installation is not required on the Azure VM.
 | Component | Version / implementation | Purpose |
 |---|---|---|
 | Docker Engine | Docker version selected by the Azure VM | Container runtime |
-| Docker Compose | Compose v2 | Service deployment and configuration |
+| Docker Compose | Compose v2.17+ | Service deployment and configuration (`up --wait`) |
 | Linux | Ubuntu 26.04 LTS recommended | Azure VM operating system |
 | Azure Linux VM | amd64 or arm64 | Host for the container deployment |
 
@@ -58,7 +58,7 @@ The database stores Polaris metadata, not Iceberg table data files.
 | Apache Iceberg REST catalog API | Catalog discovery and table/namespace operations |
 | Polaris Management REST API | Catalog, principal, role, and privilege administration |
 | OAuth 2.0 client credentials | Polaris and external catalog authentication |
-| HTTPS/TLS | Secure REST communication |
+| HTTPS/TLS at an approved ingress gateway | Secure client-to-service communication; Compose's Polaris listener itself is plaintext HTTP |
 | JDBC | Polaris-to-Postgres communication |
 
 Polaris HTTP listeners:
@@ -107,9 +107,11 @@ vended credentials as applicable, and connect directly to ADLS for data files.
 | Public DNS | Required for public HTTPS hostnames |
 | Private DNS | Recommended for private hostnames |
 
-This deployment connects clients, Polaris, Tableflow, and Azure endpoints
-directly. Network policy is enforced with NSG rules and any selected Azure
-outbound firewall or NAT service.
+Clients connect over HTTPS through an approved TLS-terminating gateway;
+the gateway connects to Polaris on HTTP port 8181. Restrict that backend port
+to the gateway. Polaris connects directly to Tableflow and Azure endpoints,
+with network policy enforced by NSGs and any selected Azure outbound firewall
+or NAT service.
 
 ## Administration and Automation
 

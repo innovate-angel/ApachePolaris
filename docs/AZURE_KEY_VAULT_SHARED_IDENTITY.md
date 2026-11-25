@@ -128,9 +128,10 @@ Do not print secret values, save the command in shell history, or use a shell
 command on a shared terminal when the deployment process supports a secret
 pipeline or protected deployment variable.
 
-Configuration identifiers that are not secrets can remain in `.env`, including
-the PostgreSQL user, Polaris root client ID, Azure tenant/client IDs, storage
-account/container, and Tableflow organization/environment IDs.
+Export non-secret deployment settings in the same shell as the deployment
+command (for example `VAULT_NAME`, `IDENTITY_CLIENT_ID`, Azure IDs, storage
+account/container, and Tableflow organization/environment IDs). The deployment
+scripts do not read `.env`; `.env.example` is a deprecated reference only.
 
 ## 4. Authenticate to Key Vault on the VM
 
@@ -139,8 +140,11 @@ Install Azure CLI and sign in with the attached shared identity:
 ```bash
 az login \
   --identity \
+  --allow-no-subscriptions \
   --client-id "$IDENTITY_CLIENT_ID"
 ```
+
+The managed identity needs access to the vault, not a subscription-wide role.
 
 Read one secret to validate access without displaying it:
 
@@ -154,50 +158,21 @@ test -n "$value"
 unset value
 ```
 
-## 5. Launch the application with transient secrets
+## 5. Deploy with transient secrets
 
 Docker Compose does not resolve Key Vault references directly. The deployment
-process must retrieve secrets before starting Compose. Keep secret variables
-out of the persisted `.env` file and export them in the same shell as the
-Compose and deployment commands:
+entry point retrieves secrets before starting Compose. Keep secret variables
+out of the persisted `.env` file and let the script clean them up on exit:
 
 ```bash
-VAULT_NAME=<key-vault-name>
-
-get_secret() {
-  az keyvault secret show \
-    --vault-name "$VAULT_NAME" \
-    --name "$1" \
-    --query value \
-    --output tsv
-}
-
-export POSTGRES_PASSWORD="$(get_secret polaris-postgres-password)"
-export POLARIS_ROOT_CLIENT_SECRET="$(get_secret polaris-root-client-secret)"
-export POLARIS_TOKEN_BROKER_SECRET="$(get_secret polaris-token-broker-secret)"
-export AZURE_CLIENT_SECRET="$(get_secret polaris-azure-client-secret)"
-export TABLEFLOW_API_KEY="$(get_secret polaris-tableflow-api-key)"
-export TABLEFLOW_API_SECRET="$(get_secret polaris-tableflow-api-secret)"
-
-docker compose up -d postgres
-docker compose --profile bootstrap run --rm polaris-bootstrap
-docker compose up -d polaris
-
-./scripts/check-tableflow.sh
-./scripts/setup-tableflow-federation.sh
-./scripts/verify.sh
-
-unset POSTGRES_PASSWORD \
-  POLARIS_ROOT_CLIENT_SECRET \
-  POLARIS_TOKEN_BROKER_SECRET \
-  AZURE_CLIENT_SECRET \
-  TABLEFLOW_API_KEY \
-  TABLEFLOW_API_SECRET
+export VAULT_NAME="<key-vault-name>"
+export IDENTITY_CLIENT_ID="<managed-identity-client-id>"
+# Export the non-secret settings required by the deployment.
+./scripts/deploy-from-key-vault.sh
 ```
 
-If a secret name is present in `.env`, remove the secret assignment rather
-than leaving it blank. An assignment in `.env` may interfere with the exported
-deployment value when scripts source that file.
+Use `./scripts/compose.sh <operation>` for day-to-day Compose commands; it
+retrieves Key Vault secrets transiently and refuses to print resolved config.
 
 ## Moving to another VM
 
@@ -205,8 +180,8 @@ deployment value when scripts source that file.
 2. Install the required runtime and Azure CLI.
 3. Attach the existing shared user-assigned managed identity.
 4. Wait for the identity assignment to propagate.
-5. Sign in with `az login --identity --client-id`.
-6. Run the secret retrieval and deployment sequence.
+5. Export the non-secret deployment settings.
+6. Run `./scripts/deploy-from-key-vault.sh`.
 
 The Key Vault, managed identity, secret names, and RBAC assignment remain
 unchanged.
@@ -217,10 +192,11 @@ unchanged.
 - Keep Key Vault RBAC authorization enabled; avoid legacy access policies.
 - Enable soft delete and purge protection on Key Vault.
 - Restrict Key Vault network access and authorize the VM's outbound route.
-- Rotate application secrets in Key Vault, then restart/redeploy the affected
-  containers so the new values are loaded.
+- Rotate application secrets in Key Vault, then run the deployment entry point
+  or use `./scripts/compose.sh` to restart affected containers.
 - Do not log secret values or run `docker compose config` with unrestricted
-  output while secret environment variables are exported.
+  output while secret environment variables are exported. The Compose wrapper
+  only permits `config -q`.
 - Limit Docker group membership. Users with privileged Docker access may be
   able to inspect environment variables in running containers.
 - Keep Key Vault retrieval in a protected deployment or systemd unit rather

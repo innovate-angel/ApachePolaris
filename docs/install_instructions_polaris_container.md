@@ -1,415 +1,378 @@
-# Installing Apache Polaris (container) on an Azure VM
+# Install Apache Polaris on an Azure VM
 
-**Author:** Angel Vega  
-**Date:** 2026-11-24
+This runbook takes a fresh Ubuntu VM to a running Polaris 1.9.0 catalog
+federated to Confluent Cloud Tableflow. Docker Compose runs Polaris, its
+one-off Admin Tool, and PostgreSQL. Query engines connect to Polaris over
+HTTPS and use vended credentials to read table files directly from ADLS Gen2.
 
-Step-by-step instructions to deploy the latest open-source Apache Polaris release (1.9.0 as of 2026-11-24) with
-Docker Compose on an Azure Linux VM and federate it to the Confluent Cloud
-Tableflow Iceberg REST catalog, with Azure ADLS Gen2 access for table files.
+## 1. Prerequisites — before you start
 
-For CLI installation and administration, see
-[Apache Polaris CLI](POLARIS_CLI.md).
+- [ ] **Azure and Confluent access.** An Azure subscription and tenant, Azure
+  Portal access, and a Confluent Cloud environment with a Kafka cluster that
+  supports Tableflow on Azure. Arrange for the appropriate admins to create
+  resources, assign Azure roles, register an Entra application, write Key
+  Vault secrets, and configure Tableflow and its provider integration.
+- [ ] **VM and repository access.** Ubuntu 26.04 LTS (`amd64` or `arm64`),
+  at least 2 vCPU and 4 GB RAM, and persistent disk space for images and the
+  PostgreSQL volume. Keep host ports `8181` and `8182` free for Polaris. Have
+  an SSH route to the VM (or Azure Bastion), a VM user with `sudo`, and the
+  approved Git clone URL, deployment branch/tag, and Git authentication method.
+  The approved ref must contain this runbook's changes.
+- [ ] **Cloud resources.** An Azure RBAC-enabled Key Vault, a user-assigned
+  managed identity for reading its secrets, a separate Polaris service principal
+  for vending ADLS credentials, and an ADLS Gen2 container for Tableflow
+  bring-your-own-storage (BYOS). Have a Tableflow-scoped API key and at least
+  one materialized Iceberg table before validating table reads. Section 2
+  explains how to prepare these.
+- [ ] **Network, DNS, and TLS.** Confirm the routes below with the network
+  owner. If query engines will connect remotely, arrange an approved TLS gateway
+  and a trusted certificate for its client-facing DNS name. The gateway is
+  external to Compose; you can verify the VM locally without it.
+- [ ] **VM software.** Bash and standard Ubuntu utilities, Git, curl, jq, CA
+  certificates, **Azure CLI (`az`)**, and Docker Engine with a Compose plugin
+  that supports `docker compose up --wait`. Section 3 installs and verifies
+  these before cloning. No separate PowerShell, Java, Python, PostgreSQL,
+  Confluent CLI, or Polaris CLI installation is needed on the VM.
 
----
+| From | To | Why |
+|---|---|---|
+| Approved admin network or Bastion | VM TCP `22` | SSH |
+| Approved query engines | TLS gateway TCP `443` | Client-facing HTTPS |
+| TLS gateway only | VM private IP, TCP `8181` | Polaris HTTP backend; never expose this port directly to clients |
+| VM | `169.254.169.254:80` | Azure Instance Metadata Service (IMDS) for managed identity; bypass HTTP proxies |
+| VM | `<vault>.vault.azure.net`, `management.azure.com`, TCP `443` | Key Vault reads and Azure CLI account discovery |
+| VM and containers | Regional Tableflow host, `login.microsoftonline.com`, and `<account>.blob.core.windows.net` / `<account>.dfs.core.windows.net`, TCP `443` | Tableflow federation and ADLS credential vending |
+| VM | Approved Git host (TCP `443` for HTTPS or the configured SSH port); Ubuntu package mirrors; `packages.microsoft.com` and `download.docker.com`; Docker Hub registry, auth, and image-delivery hosts (including `registry-1.docker.io` and `auth.docker.io`) | Clone, package installation, and image pulls |
+| Query engines | `<account>.blob.core.windows.net` / `<account>.dfs.core.windows.net`, TCP `443` | Read Iceberg files using vended SAS credentials |
 
-## 0. What you end up with
+Allow DNS through the configured resolvers. NSG rules alone do not open Key
+Vault or storage firewalls. For private endpoints, confirm the normal service
+hostnames resolve to the private addresses from every required network. Keep
+PostgreSQL `5432` internal and Polaris health port `8182` on VM loopback only.
 
-```
- Google BigQuery / Microsoft Fabric / Amazon Redshift /
- Amazon SageMaker Unified Studio / Dremio / ThoughtSpot /
- Starburst / MotherDuck
-                    │
-                    │ HTTPS REST catalog requests
-                    ▼
-       Apache Polaris :8181 (Azure VM)
-                    │
-          ┌─────────┼──────────────────────┐
-          │         │                      │
-          ▼         │ federation via HTTPS │ user-delegation key
-  PostgreSQL :5432  │                      │
-  Polaris metadata, ▼                      ▼
-  realms, RBAC   Tableflow           ADLS Gen2
-                 Confluent Iceberg   BYOS container
-                 master catalog      (Iceberg data files)
+## 2. Prepare cloud resources — Azure and Confluent consoles
 
- Query engines receive SAS tokens from Polaris and access those data files
- directly; the VM does not proxy data-file traffic.
-```
+Complete this section before your first VM deployment. Reuse resources that
+already satisfy these requirements; do not generate replacement credentials
+for an existing deployment just to follow this guide.
 
-| Container  | Image                              | Ports on the VM            |
-|------------|------------------------------------|----------------------------|
-| `postgres` | `postgres:17-alpine`               | none (internal only)       |
-| `polaris`  | `apache/polaris:latest`             | `8181` (API), `127.0.0.1:8182` (health) |
-| `polaris-bootstrap` (one-off) | `apache/polaris-admin-tool:latest` | none           |
+### 2.1 Create or confirm the VM and storage
 
-Official current release documentation:
-https://polaris.apache.org/releases/1.9.0/
+1. In Azure Portal, open **Virtual machines → Create → Azure virtual machine**.
+   Select the approved resource group, VNet/subnet, Ubuntu 26.04 LTS image,
+   size, and persistent disk. Configure SSH key authentication and the inbound
+   rules in section 1. If your VM already exists, confirm these settings
+   instead.
+2. In Azure Portal, open **Storage accounts → Create**. Select the Kafka
+   cluster's Azure region (East US 2 for the example in this repository).
+   On **Advanced**, enable **Hierarchical namespace**. Create a dedicated empty
+   container under **Data storage → Containers** for a new Tableflow setup,
+   or confirm the existing BYOS container. Record the storage account and
+   container names.
+3. Configure the storage network policy for Confluent, the Polaris VM, and
+   the query engines that will read the data. Use the approved private or
+   service endpoint design; do not open the storage account to work around
+   a blocked route.
 
-Federation means Polaris forwards catalog calls **live** to Tableflow. Nothing
-is copied. Tables are read-only, and Tableflow stays the owner. Polaris adds
-its own logins and roles, plus short-lived ADLS SAS tokens (credential
-vending) so that query engines can read the data files directly. Polaris does
-not proxy the data files; its Azure identity is used only to obtain a
-user-delegation key and mint the client credentials.
+### 2.2 Give Confluent and Polaris access to storage
 
----
+1. In Confluent Cloud, set up the Azure provider integration for Tableflow
+   using [Confluent's storage setup guide](https://docs.confluent.io/cloud/current/topics/tableflow/how-to-guides/configure-storage.html).
+   In Azure Portal, grant the integration's **Confluent** service principal
+   `Storage Blob Data Contributor` and `Reader` on the storage account.
+2. Create or reuse a **separate** Polaris application in **Microsoft Entra
+   ID → App registrations** in the storage account's tenant. Record its
+   **Directory (tenant) ID** and **Application (client) ID**. In the app's
+   **Certificates & secrets → Client secrets**, create a secret if needed.
+   Save the secret **Value**, not the Secret ID, for Key Vault.
+3. On the storage account, go to **Access control (IAM) → Add role assignment**.
+   Grant `Storage Blob Data Contributor` at **storage account scope** to the
+   Polaris application's service principal. It must be able to request a user
+   delegation key; container-only scope does not suffice for that operation.
 
-## 1. Prerequisites
+### 2.3 Enable Tableflow and collect catalog credentials
 
-### 1.1 Azure VM
-- Ubuntu 26.04 LTS (amd64 or arm64), at least 2 vCPU and 4 GB RAM.
-- Outbound HTTPS from the VM directly to
-  `tableflow.eastus2.azure.confluent.cloud`, controlled by NSG and any Azure
-  outbound firewall or NAT rules.
+1. In Confluent Cloud, open the target Kafka topic and select **Enable
+   Tableflow**. Choose Iceberg and **Bring Your Own Storage**, then select the
+   provider integration, storage account, and container from the preceding
+   steps. Use a topic with data and wait for an Iceberg table to materialize.
+2. Open **Tableflow → API access** and copy the **REST Catalog Endpoint**.
+   Record the HTTPS host and the organization and environment IDs from the
+   endpoint:
 
-### 1.2 Network security group (NSG)
+   ```text
+   https://tableflow.eastus2.azure.confluent.cloud/iceberg/catalog/organizations/<org-id>/environments/<env-id>
+   ```
 
-Inbound:
+3. Under **API access → Create/View API keys → Add API key**, choose an
+   approved service account authorized to read the target Tableflow catalog.
+   Choose **Tableflow** as the resource scope. Save both the key and its
+   secret for Key Vault. Do not use a Kafka cluster or Cloud management API
+   key here.
 
-| Port | Source                   | Purpose                    |
-|------|--------------------------|----------------------------|
-| 22   | Your admin IPs only      | SSH                        |
-| 8181 | Approved client networks | Direct Polaris HTTP access |
+### 2.4 Populate Key Vault and attach the VM identity
 
-Outbound:
+1. In **Key vaults**, create or select the deployment vault. Confirm its
+   permission model is **Azure role-based access control**. Allow secret
+   access from the VM and the approved admin network. Use an account with
+   `Key Vault Secrets Officer` or equivalent data-plane permission to add the
+   secrets under **Objects → Secrets → Generate/Import**.
+2. Create the six enabled secrets below using the **exact names**. For a fresh
+   deployment, generate two different random passwords (`openssl rand -hex 32`
+   for each, or an approved password generator) and generate a separate signing
+   key with `openssl rand -base64 48`. Generate them on a trusted admin system
+   and transfer the values directly to Key Vault using your approved process.
 
-| Port | Destination | Purpose |
-|------|-------------|---------|
-| 443  | Tableflow and required Azure endpoints | Direct HTTPS |
+   | Key Vault secret name | What to store |
+   |---|---|
+   | `polaris-postgres-password` | Generated PostgreSQL password |
+   | `polaris-root-client-secret` | Generated Polaris bootstrap administrator secret |
+   | `polaris-token-broker-secret` | Generated Base64 signing key; keep it stable across redeployments |
+   | `polaris-azure-client-secret` | Polaris Entra app's client secret **value** from section 2.2 |
+   | `polaris-tableflow-api-key` | Tableflow-scoped key from section 2.3 |
+   | `polaris-tableflow-api-secret` | Matching Tableflow API secret |
 
-Polaris publishes 8181 on all interfaces so approved client networks can reach
-it directly. Restrict 8181 in the NSG to the required client IP ranges.
+3. In **Managed Identities**, create or select the user-assigned deployment
+   identity and record its **Client ID**, not its Object (principal) ID.
+   On the VM, go to **Identity → User assigned → Add** and attach it.
+4. On the vault, go to **Access control (IAM) → Add role assignment**. Grant
+   `Key Vault Secrets User` to that managed identity at vault scope. Wait
+   for the assignment to propagate. The VM's identity does not need
+   permission to create secrets or a subscription-wide role. The Polaris
+   service principal does not need Key Vault access.
 
-### 1.3 ADLS Gen2 storage account (Tableflow BYOS)
-- Storage account with **hierarchical namespace enabled**, in the **same region
-  as the Kafka cluster** (eastus2).
-- The container that Tableflow writes to (bring-your-own-storage). Polaris
-  can't read topics that use Confluent-managed storage.
+For the equivalent Azure CLI identity setup, see
+[Shared User-Assigned Managed Identity](./AZURE_KEY_VAULT_SHARED_IDENTITY.md).
 
-### 1.4 Identity used by Polaris to mint ADLS credentials
+## 3. Install packages — on the Ubuntu VM
 
-The query engine's data path does not pass through Polaris or the VM. After an
-authorized catalog request, Polaris returns short-lived ADLS credentials and
-the query engine uses them to read data directly from the storage account.
+SSH to the VM as the deployment user (or connect through Bastion). Use Bash
+for the remaining VM commands. Stop and resolve any command error before
+moving to the next section.
 
-Credential vending still requires the Polaris process to authenticate to
-Azure. Its identity requests the user-delegation key used to sign the SAS
-token. Configure a service principal for the Polaris process so the same
-identity can be reused across multiple VMs and Polaris installations that
-access the same permitted storage resources.
+### 3.1 Install Git, curl, jq, and Azure CLI
 
-### Create the service principal
-
-`polaris-storage` below is the service principal's display name, not its
-client ID. Create the service principal once, then securely provide the same
-three credential values—`appId`, `password`, and `tenant`—to each Polaris
-installation:
-
-```bash
-az ad sp create-for-rbac --name polaris-storage \
-  --role "Storage Blob Data Contributor" \
-  --scopes /subscriptions/<sub-id>/resourceGroups/<storage-rg>/providers/Microsoft.Storage/storageAccounts/<storage-account>
-# Note appId -> AZURE_CLIENT_ID, password -> AZURE_CLIENT_SECRET, tenant -> AZURE_TENANT_ID
-```
-
-The App ID alone is not sufficient for authentication. Each installation must
-be configured with `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and
-`AZURE_TENANT_ID`. Add a new role assignment only if the service principal
-must access another storage account, container, or resource scope.
-
-`Storage Blob Data Contributor` permits Polaris to request a user-delegation
-key and issue scoped SAS tokens. `Reader` alone cannot mint user-delegation
-SAS tokens. The VM does not transfer or proxy table data, but it must be able
-to reach the Azure identity and storage endpoints used for credential vending.
-Role assignments can take several minutes to take effect.
-
-Get your tenant ID:
-```bash
-az account show --query tenantId -o tsv
-```
-
-### 1.5 Confluent Cloud
-- The Tableflow REST catalog endpoint:
-  `https://tableflow.eastus2.azure.confluent.cloud/iceberg/catalog/organizations/54c99051-8b33-4f51-b105-132f643b1720/environments/env-xq8wnq`
-- A Confluent Cloud **API key and secret scoped to Tableflow** that can access
-  environment `env-xq8wnq`:
-  ```bash
-  confluent api-key create --resource tableflow
-  ```
-- Tableflow-enabled topics configured for **BYOS** into the ADLS container
-  from section 1.3.
-
-### 1.6 Direct Tableflow network access
-
-Polaris calls Tableflow directly. Set the base URL:
-
-```text
-TABLEFLOW_PROXY_BASE_URL=https://tableflow.eastus2.azure.confluent.cloud
-```
-
-The variable retains its historical name but contains the direct Tableflow
-host. The scripts append the organization and environment path from section
-1.5 to form the complete catalog URL.
-
-The Polaris container must resolve and reach the Tableflow host on TCP 443.
-Configure outbound DNS, NSG rules, and any Azure NAT/firewall policy for
-direct access, and ensure the container trusts the public Tableflow
-certificate chain.
-
----
-
-## 2. Clone the repository on the VM
-
-Push the completed repository to the corporate Tableflow Git repository, then
-clone that repository from the VM:
-
-```bash
-git clone <corporate-tableflow-git-repository-url> ApachePolaris
-cd ApachePolaris
-```
-
-Use the organization-approved Git authentication method. Do not embed Git
-credentials in the repository URL, scripts, or `.env`.
-
-Expected layout on the VM:
-```
-ApachePolaris/
-├── docker-compose.yml
-├── .env.example
-├── configs/polaris/application.properties
-├── postgres/initdb/01-schema.sql
-└── scripts/
-    ├── bootstrap.sh
-    ├── check-tableflow.sh
-    ├── setup-tableflow-federation.sh
-    └── verify.sh
-```
-
----
-
-## 3. Install Docker, curl and jq on the VM
+Use the signed Microsoft apt repository
+([Azure CLI installation reference](https://learn.microsoft.com/cli/azure/install-azure-cli-linux?pivots=apt)):
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl jq openssl
-curl -fsSL https://get.docker.com | sudo sh          # Docker Engine + compose plugin
+sudo apt-get install -y ca-certificates curl git gnupg jq
+sudo install -m 0755 -d /etc/apt/keyrings
+
+(
+  set -euo pipefail
+  ubuntu_codename="$(. /etc/os-release && printf '%s' "$VERSION_CODENAME")"
+  architecture="$(dpkg --print-architecture)"
+  curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+    | gpg --dearmor \
+    | sudo tee /etc/apt/keyrings/microsoft.gpg > /dev/null
+  sudo chmod a+r /etc/apt/keyrings/microsoft.gpg
+  sudo tee /etc/apt/sources.list.d/azure-cli.sources > /dev/null <<EOF
+Types: deb
+URIs: https://packages.microsoft.com/repos/azure-cli/
+Suites: ${ubuntu_codename}
+Components: main
+Architectures: ${architecture}
+Signed-By: /etc/apt/keyrings/microsoft.gpg
+EOF
+  sudo apt-get update
+  sudo apt-get install -y azure-cli
+)
+
+git --version
+curl --version
+jq --version
+az version
+```
+
+### 3.2 Install Docker Engine and the Compose plugin
+
+On a fresh VM, use [Docker's signed apt repository](https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository).
+On a VM with an existing Docker installation, verify it first. Do not
+replace a working installation or remove volumes to follow these commands.
+
+```bash
+(
+  set -euo pipefail
+  ubuntu_codename="$(. /etc/os-release && printf '%s' "$VERSION_CODENAME")"
+  architecture="$(dpkg --print-architecture)"
+  sudo install -m 0755 -d /etc/apt/keyrings
+  sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+    -o /etc/apt/keyrings/docker.asc
+  sudo chmod a+r /etc/apt/keyrings/docker.asc
+  sudo tee /etc/apt/sources.list.d/docker.sources > /dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: ${ubuntu_codename}
+Components: stable
+Architectures: ${architecture}
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+  sudo apt-get update
+  sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
+    docker-buildx-plugin docker-compose-plugin
+  sudo systemctl enable --now docker
+)
+```
+
+If only `sudo` can access Docker, grant the approved deployment user Docker
+access. Membership in the `docker` group is effectively root access; do not
+grant it to untrusted users.
+
+```bash
 sudo usermod -aG docker "$USER"
-newgrp docker                                         # or log out and back in
-docker version && docker compose version
 ```
 
----
-
-## 4. Configure Azure Key Vault and deployment variables
+Disconnect and reconnect over SSH after changing group membership. Verify these
+commands as the deployment user **without** `sudo`:
 
 ```bash
-cd ~/ApachePolaris
+docker info --format '{{.ServerVersion}}'
+docker compose version
+docker compose up --help | grep -F -- '--wait'
 ```
 
-Store secrets in Key Vault under the names in
-`docs/AZURE_KEY_VAULT_SHARED_IDENTITY.md`. Export non-secret configuration
-variables in the deployment shell:
+## 4. Clone and configure — on the VM
+
+Replace the bracketed placeholders below before running the commands. Use
+approved Git credentials; do not put tokens in the clone URL.
 
 ```bash
-export VAULT_NAME="<key-vault-name>"
-export IDENTITY_CLIENT_ID="<shared-managed-identity-client-id>"
-export POSTGRES_USER="M73581"
-export POLARIS_ROOT_CLIENT_ID="M73580"
-export POLARIS_REALM="ISBUS"
-export AZURE_TENANT_ID="<tenant-id>"
-export AZURE_CLIENT_ID="<storage-service-principal-app-id>"
-export AZURE_STORAGE_ACCOUNT="<storage-account>"
-export AZURE_STORAGE_CONTAINER="tableflow"
-export TABLEFLOW_PROXY_BASE_URL="https://tableflow.eastus2.azure.confluent.cloud"
-export TABLEFLOW_ORG_ID="<tableflow-org-id>"
-export TABLEFLOW_ENV_ID="<tableflow-env-id>"
+cd "$HOME" &&
+  git clone --branch '<approved-branch-or-tag>' '<approved-git-url>' ApachePolaris &&
+  cd ApachePolaris
 ```
 
-Deploy with the transient Key Vault environment:
+Export the non-secret settings in the same Bash session you'll use to deploy.
+You can keep this block in an approved configuration file for future sessions,
+but do not store secrets in it or rely on `.env`.
+
+```bash
+export VAULT_NAME='<vault-name>'
+export IDENTITY_CLIENT_ID='<VM-managed-identity-client-id>'
+export AZURE_TENANT_ID='<Polaris-Entra-app-tenant-id>'
+export AZURE_CLIENT_ID='<Polaris-Entra-app-client-id>'
+export AZURE_STORAGE_ACCOUNT='<ADLS-account-name>'
+export AZURE_STORAGE_CONTAINER='<Tableflow-BYOS-container-name>'
+export TABLEFLOW_PROXY_BASE_URL='https://tableflow.eastus2.azure.confluent.cloud'
+export TABLEFLOW_ORG_ID='<Tableflow-organization-id>'
+export TABLEFLOW_ENV_ID='<Tableflow-environment-id>'
+```
+
+`TABLEFLOW_PROXY_BASE_URL` is the Tableflow HTTPS origin from section 2.3 (no
+path), despite its name. The scripts append the catalog path and derive the
+OAuth token URL. The repository defaults are realm `ISBUS`, PostgreSQL user
+`M73581`, bootstrap client ID `M73580`, and catalog name `tableflow`. Leave
+`POLARIS_URL` unset during deployment so the scripts use the local HTTP
+listener. Keep `CURL_INSECURE` unset so TLS certificate validation stays on.
+
+### Preflight: prove the VM can read Key Vault and resolve Compose
+
+```bash
+./scripts/compose.sh config -q
+```
+
+This uses `az login --identity` with the attached identity, checks that all
+six secret values can be read, and validates Compose without printing the
+resolved configuration. Exit status zero means the preflight passed. No
+containers are started. If it fails, do not deploy: check the VM identity
+attachment, vault permissions and firewall, secret names, and exported
+settings. There is no interactive Azure login or PowerShell step on the VM.
+
+## 5. Deploy and verify — on the VM
+
+From `~/ApachePolaris`, keeping the exports from section 4:
 
 ```bash
 ./scripts/deploy-from-key-vault.sh
 ```
 
-The derived URLs that Polaris uses are:
-```
-catalog: ${TABLEFLOW_PROXY_BASE_URL}/iceberg/catalog/organizations/${TABLEFLOW_ORG_ID}/environments/${TABLEFLOW_ENV_ID}
-token:   <catalog>/v1/oauth/tokens
-```
-
-Validate the configuration:
-```bash
-docker compose config -q && echo "compose config OK"
-```
-
----
-
-## 5. Start Postgres and bootstrap Polaris
+The script loads secrets in its own process, starts `postgres:17-alpine`,
+bootstraps the realm with `apache/polaris-admin-tool:1.9.0`, waits for
+`apache/polaris:1.9.0` to be healthy, checks direct Tableflow access, creates
+the federated catalog, and runs verification. Compose pulls missing images
+automatically. On a fresh volume, the Postgres init script creates the SQL
+schema and the matching Polaris Admin Tool creates its tables.
 
 ```bash
-./scripts/deploy-from-key-vault.sh
+./scripts/compose.sh ps
+curl -fsS http://127.0.0.1:8182/q/health | jq -e '.status == "UP"'
 ```
-Expected output: `Realm 'ISBUS' successfully bootstrapped.` If you run it
-again, it reports that the realm is already bootstrapped and exits cleanly.
 
-Every `--realm` passed to the Admin Tool must have a matching
-`--credential=realm,clientId,clientSecret`. Do not omit
-`POLARIS_ROOT_CLIENT_SECRET`: without an explicit credential, bootstrap can
-create an inaccessible principal with a random secret that is not reported.
-
-The schema script in `postgres/initdb/` only runs the **first** time the
-Postgres volume is created. Polaris 1.9.0 uses one versioned
-`schema.sql` script for PostgreSQL and validates the metastore schema version
-before accepting realm requests.
-
-The Compose datasource sets `currentSchema=POLARIS_SCHEMA` explicitly for both
-the Admin Tool and server. This prevents an upgrade or bootstrap from selecting
-a different schema accidentally.
-
----
-
-## 6. Start Polaris
+Both `postgres` and `polaris` should be healthy. The one-off Admin Tool is not
+a running service. In the deployment output, look for a loaded table under the
+expected ADLS account/container and a non-empty `sasKeys` list. A green
+health check, `All checks passed.` without SAS keys, or a successful exit
+with `No namespaces` or `No tables` **does not** prove data access. If the
+table hasn't materialized yet, check Tableflow, then rerun verification:
 
 ```bash
-docker compose up -d
-docker compose ps                     # polaris should become "healthy" (about 30-60 s)
-curl -s http://127.0.0.1:8182/q/health | jq .status     # "UP"
-docker compose logs polaris --tail 50
+(set -e; source scripts/load-key-vault-env.sh; ./scripts/verify.sh)
 ```
 
-Look for the Polaris server startup line and `Listening on http://0.0.0.0:8181`.
+You can rerun deployment after fixing a failed step without removing the
+database volume. It does not update the credentials or URL of a previously
+created external catalog. Use an approved catalog update or rotation procedure
+if those values change.
 
----
+## 6. Connect a query engine — after local verification
 
-## 7. Check Tableflow connectivity (without Polaris)
+1. Configure the approved gateway with an HTTPS listener on `443`, the
+   certificate matching the client-facing hostname, and an HTTP backend
+   pointing to `<vm-private-ip>:8181`. Preserve `/api/catalog` and authorize
+   the gateway's source subnet/IPs in the VM NSG. Configure the gateway's
+   health probe for port `8181` (TCP where supported, otherwise an appropriate
+   HTTP endpoint/status). Do not open the VM-only `8182` health port.
+2. Create a dedicated Polaris principal with read access to the federated
+   catalog using the [Polaris administration guide](./POLARIS_CLI.md). Do not
+   give a query engine the bootstrap administrator's credentials.
+3. On an Iceberg REST-capable query engine with Azure storage support, set
+   the catalog URI to `https://<gateway-hostname>/api/catalog` and the OAuth
+   token endpoint to `https://<gateway-hostname>/api/catalog/v1/oauth/tokens`.
+   Set the warehouse to `tableflow` and OAuth scope to `PRINCIPAL_ROLE:ALL`.
+   Send the headers `Polaris-Realm: ISBUS` and
+   `X-Iceberg-Access-Delegation: vended-credentials`. Use the read principal's
+   client ID and secret from the engine's secret store.
+4. List the namespaces and tables, then run a small read (such as
+   `SELECT * FROM <catalog>.<namespace>.<table> LIMIT 1`) against the known
+   materialized table. A successful read verifies the client-to-gateway
+   connection **and** the client-to-ADLS data path.
+
+## 7. Troubleshooting and operations
+
+| Symptom | Check or action |
+|---|---|
+| `az: command not found` or `docker: command not found` | Complete section 3 on the VM, not on your workstation |
+| Managed identity login error | Check the attached identity's client ID, IMDS reachability, and proxy exclusions |
+| Key Vault `403` or missing secret | Check `Key Vault Secrets User`, role propagation, firewall/private DNS, and enabled secret names |
+| Docker socket permission denied | Confirm the deployment user is authorized and has reconnected since the group change |
+| Bootstrap reports a missing schema | Check the Postgres volume's initialization history and `postgres/initdb/01-schema.sql`. Do **not** delete a volume that holds data |
+| Polaris unhealthy | Check `./scripts/compose.sh logs --tail 100 postgres polaris` and verify database credentials and the token-broker signing key |
+| Tableflow `401` or `403` | Confirm the API key is Tableflow-scoped, current, and authorized for this environment |
+| Tableflow `404` or TLS error | Compare the derived URL to the Confluent REST endpoint and check DNS, egress, and certificate trust |
+| No SAS keys or ADLS `403` | Check the Polaris service principal's storage-account role, networking and ACLs, the vending flags in `configs/polaris/application.properties`, and the catalog's allowed location |
+
+In a new SSH session, re-export the non-secret settings from section 4 and
+change to `~/ApachePolaris` before running Compose operations.
 
 ```bash
-./scripts/check-tableflow.sh
+./scripts/compose.sh logs --tail 100 polaris
+./scripts/compose.sh restart polaris
 ```
-This gets a token from the direct Tableflow URL, then prints `/v1/config` and
-the namespace list. Fix any failure here before you continue. Ensure Azure
-DNS, outbound NSG/routing/NAT, and TLS trust allow direct access to Tableflow.
 
----
-
-## 8. Create the federated catalog in Polaris
+Back up the metastore to an approved location and protect the backup like a
+secret. For example, with the default database user:
 
 ```bash
-./scripts/setup-tableflow-federation.sh
-```
-This does the following:
-1. Creates an **EXTERNAL** catalog `tableflow` with:
-   - a connection to the Tableflow REST catalog (OAuth with your API key),
-   - an Azure storage config: `abfss://<container>@<account>.dfs.core.windows.net/`
-     (hierarchical namespace on).
-2. Creates the catalog role `tableflow_reader` with `CATALOG_MANAGE_CONTENT`.
-3. Assigns that role to `M73580`'s `service_admin` principal role.
-
-It's safe to rerun. Catalog creation doesn't contact Tableflow, so wrong URLs
-or keys only show up in the next step.
-
-To change the catalog later, delete it and rerun the script:
-```bash
-TOKEN=$(curl -s http://localhost:8181/api/catalog/v1/oauth/tokens \
-  -d "grant_type=client_credentials&client_id=M73580&client_secret=<M73580-secret>&scope=PRINCIPAL_ROLE:ALL" | jq -r .access_token)
-curl -X DELETE -H "Authorization: Bearer $TOKEN" http://localhost:8181/api/management/v1/catalogs/tableflow
-```
-The delete may fail while catalog roles still exist. If it does, delete the
-role `tableflow_reader` first.
-
----
-
-## 9. Verify end to end through Polaris
-
-```bash
-./scripts/verify.sh
-```
-It checks the following, in order:
-1. Administrator token for `M73580`
-2. `/v1/config?warehouse=tableflow`
-3. Namespaces (federated from Tableflow)
-4. Tables in the first namespace
-5. Loading the first table with `X-Iceberg-Access-Delegation: vended-credentials`,
-   which shows `metadata-location` and the names of the `adls.sas-token.*` keys
-
-Success ends with `All checks passed.` If there are no namespaces or tables
-yet, wait for Tableflow to materialize a topic.
-
----
-
-## 10. Connect a query engine (example: Spark)
-
-```properties
-spark.sql.catalog.polaris=org.apache.iceberg.spark.SparkCatalog
-spark.sql.catalog.polaris.type=rest
-spark.sql.catalog.polaris.uri=https://<polaris-public-or-private-host>/api/catalog
-spark.sql.catalog.polaris.warehouse=tableflow
-spark.sql.catalog.polaris.credential=M73580:<M73580-secret>
-spark.sql.catalog.polaris.scope=PRINCIPAL_ROLE:ALL
-spark.sql.catalog.polaris.header.X-Iceberg-Access-Delegation=vended-credentials
-```
-For production, create a dedicated read-only principal instead of using `M73580`.
-
----
-
-## 11. Troubleshooting
-
-| Symptom | Likely cause / fix |
-|---------|--------------------|
-| `bootstrap` fails with `no schema has been selected` | The Postgres volume was created without the init script. Run `docker compose down -v` (this **deletes data**), then repeat step 5 |
-| `polaris` not healthy | `docker compose logs polaris`. Check DB credentials and `POLARIS_TOKEN_BROKER_SECRET` |
-| `check-tableflow.sh` 401 | Wrong API key or secret, or the key isn't scoped to Tableflow or lacks access to `env-xq8wnq` |
-| `check-tableflow.sh` 404 / TLS error | Verify DNS, outbound NSG/routing/NAT, TLS trust, and URL values for direct Tableflow access |
-| `verify.sh` namespaces call fails | Polaris can't reach `TABLEFLOW_PROXY_BASE_URL` from inside the container. Test with `docker compose exec polaris curl -sI $TABLEFLOW_PROXY_BASE_URL` |
-| `not in the list of allowed locations` | The table location from Tableflow isn't under `abfss://<container>@<account>.dfs.core.windows.net/`. Fix `AZURE_STORAGE_*` and recreate the catalog |
-| `AADSTS...` errors in logs | Wrong tenant or service principal credentials, or an expired client secret |
-| `403 AuthorizationPermissionMismatch` | The Polaris workload identity lacks `Storage Blob Data Contributor` (or role propagation is still pending), or HNS ACLs block the path |
-| No `adls.sas-token.*` keys | Credential vending isn't active. Check the flags in `configs/polaris/application.properties` and the allowed locations |
-
-Useful commands:
-```bash
-docker compose logs -f polaris
-docker compose exec polaris curl -s http://localhost:8182/q/health
-docker compose exec postgres psql -U M73581 -d POLARIS -c '\dn'
+(umask 077; ./scripts/compose.sh exec -T postgres pg_dump -U M73581 POLARIS \
+  > "polaris-$(date +%F).sql")
 ```
 
----
-
-## 12. Operations
-
-**Restart or stop**
-```bash
-docker compose restart polaris
-docker compose stop
-docker compose up -d
-```
-
-**Back up metadata**
-```bash
-docker compose exec -T postgres pg_dump -U M73581 POLARIS > polaris-$(date +%F).sql
-```
-
-**Restore**
-```bash
-docker compose exec -T postgres psql -U M73581 -d POLARIS < polaris-YYYY-MM-DD.sql
-```
-
-**Upgrade Polaris**: update `latest` or replace it with an approved release tag for `apache/polaris` and
-`apache/polaris-admin-tool` in `docker-compose.yml`, take a backup, then:
-```bash
-docker compose pull && docker compose up -d
-```
-Read the Polaris release notes and apply any schema migrations **before**
-starting the new server binary. Polaris 1.9.0+ expects a matching SQL schema
-version and fails fast with an actionable error when it does not match.
-
-**Rotate secrets**
-- Tableflow API key: update `.env`, delete the catalog, and rerun step 8.
-- `M73580` secret: rotate it through the Polaris CLI
-  (`polaris principals rotate-credentials M73580`) or management API
-  (`POST /api/management/v1/principals/M73580/rotate`), then update `.env`.
-
-**Remove everything** (this **deletes all Polaris metadata**):
-```bash
-docker compose --profile bootstrap down -v
-```
+For an upgrade, take a backup, follow the versioned
+[JDBC metastore migration instructions](https://polaris.apache.org/releases/1.9.0/metastores/relational-jdbc/#upgrading-polaris),
+and update both Polaris image tags together. Do not start a new release until
+any required database migration is applied. A Compose `restart` does not load
+new environment values into a container. Rotate secrets in their issuing
+system and Key Vault, then apply the appropriate catalog update or container
+recreation. Never run `down -v` on data you intend to keep.
