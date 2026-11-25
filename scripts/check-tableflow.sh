@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Direct check of the nginx egress proxy -> Tableflow path, bypassing Polaris.
-# Separates nginx/Tableflow problems from Polaris federation problems.
+# Direct check of the VM -> Tableflow path, bypassing Polaris.
+# Separates Tableflow connectivity problems from Polaris federation problems.
 # Requires curl + jq. Set CURL_INSECURE=1 for self-signed certs (testing only).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -24,7 +24,7 @@ echo "    token: OK (${#TOKEN} chars)"
 
 echo "==> GET ${CATALOG_URI}/v1/config"
 "${CURL[@]}" -H "Authorization: Bearer ${TOKEN}" "${CATALOG_URI}/v1/config" | jq '{defaults, overrides}'
-echo "    (note any absolute URLs / uri overrides above — clients may bypass nginx)"
+echo "    (note any absolute URLs / uri overrides above)"
 
 echo "==> GET ${CATALOG_URI}/v1/namespaces"
 "${CURL[@]}" -H "Authorization: Bearer ${TOKEN}" "${CATALOG_URI}/v1/namespaces" | jq .

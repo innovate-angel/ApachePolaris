@@ -19,27 +19,21 @@ For CLI installation and administration, see
  Amazon SageMaker Unified Studio / Dremio / ThoughtSpot /
  Starburst / MotherDuck
                     │
-                    │ HTTPS REST read requests
+                    │ HTTPS REST catalog requests
                     ▼
        Apache Polaris :8181 (Azure VM)
                     │
-          ┌─────────┼────────────────────────┐
-          │         │                        │
-          ▼         │ PULL / federation via  │
-  PostgreSQL :5432 │ HTTPS REST             │
-  Polaris metadata, └────────────────────► Tableflow
-  realms, RBAC                            Confluent Iceberg
-                                           master catalog
-                                                 │
-                                                 │ Read/write
-                                                 ▼
-                                         ADLS Gen2 storage account
-                                         BYOS container
-                                         (Iceberg data files)
-                                                 ▲
-                                                 │
-       Apache Polaris direct read access / credential vending
-       (Azure managed identity or service principal)
+          ┌─────────┼──────────────────────┐
+          │         │                      │
+          ▼         │ federation via HTTPS │ user-delegation key
+  PostgreSQL :5432  │                      │
+  Polaris metadata, ▼                      ▼
+  realms, RBAC   Tableflow           ADLS Gen2
+                 Confluent Iceberg   BYOS container
+                 master catalog      (Iceberg data files)
+
+ Query engines receive SAS tokens from Polaris and access those data files
+ directly; the VM does not proxy data-file traffic.
 ```
 
 | Container  | Image                              | Ports on the VM            |
@@ -53,29 +47,38 @@ https://polaris.apache.org/releases/1.9.0/
 
 Federation means Polaris forwards catalog calls **live** to Tableflow. Nothing
 is copied. Tables are read-only, and Tableflow stays the owner. Polaris adds
-its own logins and roles, plus short-lived ADLS SAS tokens (credential vending)
-so that query engines can read the data files.
+its own logins and roles, plus short-lived ADLS SAS tokens (credential
+vending) so that query engines can read the data files directly. Polaris does
+not proxy the data files; its Azure identity is used only to obtain a
+user-delegation key and mint the client credentials.
 
 ---
 
 ## 1. Prerequisites
 
 ### 1.1 Azure VM
-- Ubuntu 22.04 or 24.04 LTS (amd64 or arm64), at least 2 vCPU and 4 GB RAM.
-- Outbound HTTPS from the VM to
-  `tableflow.eastus2.azure.confluent.cloud`, directly or through your existing
-  nginx/Azure egress proxy.
+- Ubuntu 26.04 LTS (amd64 or arm64), at least 2 vCPU and 4 GB RAM.
+- Outbound HTTPS from the VM directly to
+  `tableflow.eastus2.azure.confluent.cloud`, controlled by NSG and any Azure
+  outbound firewall or NAT rules.
 
 ### 1.2 Network security group (NSG)
-| Port | Source                     | Purpose                                 |
-|------|----------------------------|-----------------------------------------|
-| 22   | Your admin IPs only        | SSH                                     |
-| 443  | As needed by ingress proxy | HTTPS ingress, if used                   |
-| 8181 | Private network or proxy IP | Polaris API; do not expose to internet |
 
-Polaris publishes 8181 on all interfaces so an ingress proxy or approved private
-network client can reach it.
-**Do not** open 8181 to the internet in the NSG.
+Inbound:
+
+| Port | Source                   | Purpose                    |
+|------|--------------------------|----------------------------|
+| 22   | Your admin IPs only      | SSH                        |
+| 8181 | Approved client networks | Direct Polaris HTTP access |
+
+Outbound:
+
+| Port | Destination | Purpose |
+|------|-------------|---------|
+| 443  | Tableflow and required Azure endpoints | Direct HTTPS |
+
+Polaris publishes 8181 on all interfaces so approved client networks can reach
+it directly. Restrict 8181 in the NSG to the required client IP ranges.
 
 ### 1.3 ADLS Gen2 storage account (Tableflow BYOS)
 - Storage account with **hierarchical namespace enabled**, in the **same region
@@ -83,20 +86,25 @@ network client can reach it.
 - The container that Tableflow writes to (bring-your-own-storage). Polaris
   can't read topics that use Confluent-managed storage.
 
-### 1.4 Identity for Polaris to access ADLS
-Choose **one** of the following.
+### 1.4 Identity used by Polaris to mint ADLS credentials
 
-**Option A: VM system-assigned managed identity (recommended, no secret)**
-```bash
-az vm identity assign -g <resource-group> -n <vm-name>
-PRINCIPAL_ID=$(az vm show -g <resource-group> -n <vm-name> --query identity.principalId -o tsv)
-az role assignment create \
-  --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal \
-  --role "Storage Blob Data Contributor" \
-  --scope /subscriptions/<sub-id>/resourceGroups/<storage-rg>/providers/Microsoft.Storage/storageAccounts/<storage-account>
-```
+The query engine's data path does not pass through Polaris or the VM. After an
+authorized catalog request, Polaris returns short-lived ADLS credentials and
+the query engine uses them to read data directly from the storage account.
 
-**Option B: service principal**
+Credential vending still requires the Polaris process to authenticate to
+Azure. Its identity requests the user-delegation key used to sign the SAS
+token. Configure a service principal for the Polaris process so the same
+identity can be reused across multiple VMs and Polaris installations that
+access the same permitted storage resources.
+
+### Create the service principal
+
+`polaris-storage` below is the service principal's display name, not its
+client ID. Create the service principal once, then securely provide the same
+three credential values—`appId`, `password`, and `tenant`—to each Polaris
+installation:
+
 ```bash
 az ad sp create-for-rbac --name polaris-storage \
   --role "Storage Blob Data Contributor" \
@@ -104,11 +112,18 @@ az ad sp create-for-rbac --name polaris-storage \
 # Note appId -> AZURE_CLIENT_ID, password -> AZURE_CLIENT_SECRET, tenant -> AZURE_TENANT_ID
 ```
 
-`Storage Blob Data Contributor` is required, because Polaris issues
-user-delegation SAS tokens and `Reader` alone can't do that. Role assignments
-can take several minutes to take effect.
+The App ID alone is not sufficient for authentication. Each installation must
+be configured with `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and
+`AZURE_TENANT_ID`. Add a new role assignment only if the service principal
+must access another storage account, container, or resource scope.
 
-Get your tenant ID (it's required in both options):
+`Storage Blob Data Contributor` permits Polaris to request a user-delegation
+key and issue scoped SAS tokens. `Reader` alone cannot mint user-delegation
+SAS tokens. The VM does not transfer or proxy table data, but it must be able
+to reach the Azure identity and storage endpoints used for credential vending.
+Role assignments can take several minutes to take effect.
+
+Get your tenant ID:
 ```bash
 az account show --query tenantId -o tsv
 ```
@@ -124,44 +139,37 @@ az account show --query tenantId -o tsv
 - Tableflow-enabled topics configured for **BYOS** into the ADLS container
   from section 1.3.
 
-### 1.6 Tableflow network access (nginx is optional)
-Polaris calls the URL configured by `TABLEFLOW_PROXY_BASE_URL`. It can call
-Tableflow directly, for example:
+### 1.6 Direct Tableflow network access
+
+Polaris calls Tableflow directly. Set the base URL:
 
 ```text
 TABLEFLOW_PROXY_BASE_URL=https://tableflow.eastus2.azure.confluent.cloud
 ```
 
-If outbound HTTPS is routed through an existing nginx egress proxy, set
-`TABLEFLOW_PROXY_BASE_URL` to that proxy and configure it to forward
-`/iceberg/...` to Tableflow. Example `server`/`location` block:
+The variable retains its historical name but contains the direct Tableflow
+host. The scripts append the organization and environment path from section
+1.5 to form the complete catalog URL.
 
-```nginx
-location /iceberg/ {
-    proxy_pass https://tableflow.eastus2.azure.confluent.cloud;
-    proxy_ssl_server_name on;                                   # send SNI to Tableflow
-    proxy_set_header Host tableflow.eastus2.azure.confluent.cloud;
-    proxy_request_buffering off;
-    # The Authorization request header is forwarded by default; do not clear it.
-}
-```
-
-The Polaris container must be able to resolve and reach the configured base
-URL on 443. A direct Tableflow URL requires outbound DNS, NAT/firewall access,
-and a publicly trusted certificate chain. An nginx hostname also requires its
-certificate to be trusted by the container.
+The Polaris container must resolve and reach the Tableflow host on TCP 443.
+Configure outbound DNS, NSG rules, and any Azure NAT/firewall policy for
+direct access, and ensure the container trusts the public Tableflow
+certificate chain.
 
 ---
 
-## 2. Copy the repository to the VM
+## 2. Clone the repository on the VM
 
-From your Mac:
+Push the completed repository to the corporate Tableflow Git repository, then
+clone that repository from the VM:
+
 ```bash
-cd ~/Library/Mobile\ Documents/com~apple~CloudDocs/opencode_projects
-rsync -av --exclude .git ApachePolaris/ <user>@<vm-ip>:~/ApachePolaris/
+git clone <corporate-tableflow-git-repository-url> ApachePolaris
+cd ApachePolaris
 ```
 
-Or push the repo to a private Git remote and run `git clone` on the VM.
+Use the organization-approved Git authentication method. Do not embed Git
+credentials in the repository URL, scripts, or `.env`.
 
 Expected layout on the VM:
 ```
@@ -210,11 +218,11 @@ nano .env
 | `POLARIS_TOKEN_BROKER_SECRET` | Output of `openssl rand -base64 48` |
 | `POLARIS_PUBLIC_HOSTNAME` | Optional, informational only |
 | `AZURE_TENANT_ID` | **Required**: tenant of the storage account |
-| `AZURE_CLIENT_ID` | Blank for system-assigned MI; MI client ID for user-assigned MI; `appId` for service principal |
-| `AZURE_CLIENT_SECRET` | Blank for managed identity; SP password for service principal |
+| `AZURE_CLIENT_ID` | Service principal `appId` |
+| `AZURE_CLIENT_SECRET` | Service principal `password` |
 | `AZURE_STORAGE_ACCOUNT` | ADLS Gen2 account name (no domain) |
 | `AZURE_STORAGE_CONTAINER` | Tableflow BYOS container name |
-| `TABLEFLOW_PROXY_BASE_URL` | Direct Tableflow URL or your nginx base URL, with no trailing path |
+| `TABLEFLOW_PROXY_BASE_URL` | Direct Tableflow base URL `https://tableflow.eastus2.azure.confluent.cloud`, with no trailing slash |
 | `TABLEFLOW_ORG_ID` | `54c99051-8b33-4f51-b105-132f643b1720` (prefilled) |
 | `TABLEFLOW_ENV_ID` | `env-xq8wnq` (prefilled) |
 | `TABLEFLOW_API_KEY` / `TABLEFLOW_API_SECRET` | Tableflow-scoped Confluent API key and secret |
@@ -284,12 +292,9 @@ Look for the Polaris server startup line and `Listening on http://0.0.0.0:8181`.
 ```bash
 ./scripts/check-tableflow.sh
 ```
-This gets a token through `TABLEFLOW_PROXY_BASE_URL`, then prints `/v1/config`
-and the namespace list. It works with either direct Tableflow access or nginx
-egress. Fix any failure here before you continue. If direct access is used,
-ensure Azure DNS, outbound routing/NAT, and TLS trust are available. If nginx
-is used, check the proxy configuration and for absolute URLs or `uri`
-overrides that might cause clients to bypass nginx.
+This gets a token from the direct Tableflow URL, then prints `/v1/config` and
+the namespace list. Fix any failure here before you continue. Ensure Azure
+DNS, outbound NSG/routing/NAT, and TLS trust allow direct access to Tableflow.
 
 ---
 
@@ -360,11 +365,11 @@ For production, create a dedicated read-only principal instead of using `M73580`
 | `bootstrap` fails with `no schema has been selected` | The Postgres volume was created without the init script. Run `docker compose down -v` (this **deletes data**), then repeat step 5 |
 | `polaris` not healthy | `docker compose logs polaris`. Check DB credentials and `POLARIS_TOKEN_BROKER_SECRET` |
 | `check-tableflow.sh` 401 | Wrong API key or secret, or the key isn't scoped to Tableflow or lacks access to `env-xq8wnq` |
-| `check-tableflow.sh` 404 / TLS error | For direct access, verify DNS, outbound routing/NAT, TLS trust, and URL values. For nginx access, verify `location`/`proxy_pass`, SNI, and certificate trust |
+| `check-tableflow.sh` 404 / TLS error | Verify DNS, outbound NSG/routing/NAT, TLS trust, and URL values for direct Tableflow access |
 | `verify.sh` namespaces call fails | Polaris can't reach `TABLEFLOW_PROXY_BASE_URL` from inside the container. Test with `docker compose exec polaris curl -sI $TABLEFLOW_PROXY_BASE_URL` |
 | `not in the list of allowed locations` | The table location from Tableflow isn't under `abfss://<container>@<account>.dfs.core.windows.net/`. Fix `AZURE_STORAGE_*` and recreate the catalog |
-| `AADSTS...` errors in logs | Wrong tenant or SP credentials, an expired secret, or the managed identity isn't enabled |
-| `403 AuthorizationPermissionMismatch` | Polaris identity lacks `Storage Blob Data Contributor` (or role propagation is still pending), or HNS ACLs block the path |
+| `AADSTS...` errors in logs | Wrong tenant or service principal credentials, or an expired client secret |
+| `403 AuthorizationPermissionMismatch` | The Polaris workload identity lacks `Storage Blob Data Contributor` (or role propagation is still pending), or HNS ACLs block the path |
 | No `adls.sas-token.*` keys | Credential vending isn't active. Check the flags in `configs/polaris/application.properties` and the allowed locations |
 
 Useful commands:

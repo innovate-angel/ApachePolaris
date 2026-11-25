@@ -46,8 +46,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      # Iceberg REST / management API for the existing nginx reverse proxy.
-      # Block 8181 from the internet in the NSG / host firewall; only nginx (443) is public.
+      # Iceberg REST / management API. Restrict 8181 to approved clients in the NSG.
       - "8181:8181"
       # management/health port exposed on localhost only
       - "127.0.0.1:8182:8182"
@@ -63,7 +62,7 @@ services:
       QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POLARIS_REALM_CONTEXT_REALMS: ${POLARIS_REALM:-ISBUS}
       QUARKUS_OTEL_SDK_DISABLED: "true"
-      # Azure credentials for ADLS access (all optional; see .env.example)
+      # Azure identity used for ADLS credential vending (optional at startup)
       AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
       AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
       AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}

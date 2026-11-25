@@ -6,18 +6,22 @@ to **federate** to the Confluent Cloud **Tableflow** Iceberg REST catalog and
 vend ADLS Gen2 credentials for the Tableflow BYOS container.
 
 For server deployment, see [install_instructions_polaris_container.md](docs/install_instructions_polaris_container.md).
+For shared VM bootstrap identity and Key Vault secret retrieval, see
+[AZURE_KEY_VAULT_SHARED_IDENTITY.md](docs/AZURE_KEY_VAULT_SHARED_IDENTITY.md).
 For CLI installation and administration, see [POLARIS_CLI.md](docs/POLARIS_CLI.md).
 For test cases and validation procedures, see [docs/tests/README.md](docs/tests/README.md).
 
 ## What "federation" means here
 
-Polaris exposes a normal Iceberg REST catalog to clients, but proxies every
+Polaris exposes a normal Iceberg REST catalog to clients, but forwards every
 catalog call **live** to the remote Tableflow catalog — there is no copy or
 sync. Tableflow owns the table metadata (it is materialized by Confluent); the
 tables are read-only to consumers. Polaris adds value on top: its own
 authnz/roles and **credential vending** — it mints ADLS user-delegation SAS
 tokens so clients can read the data files directly from the BYOS storage
-account.
+account. Polaris mediates authorization and vends credentials; it does not
+proxy or transfer the table data. The Polaris process still needs an Azure
+identity to request the user-delegation key used to sign those tokens.
 
 ## Architecture
 
@@ -25,50 +29,38 @@ account.
  Iceberg clients (Spark/Trino/Flink)
         │  Iceberg REST + OAuth
         ▼
-   existing nginx :443  ──(public TLS, inbound)──►  polaris:8181 on this VM
+   direct :8181 access, restricted by NSG ─────────► polaris:8181 on this VM
         │                                            │
-        │        ┌───────────────────────────────────┼─────────────┐
-        │        │                                   │             │
-        ▼        │        federates live ───────────►│ postgres    │ (metadata, internal only)
- tableflow.eastus2.azure.confluent.cloud             │             ▼
-   (through the SAME nginx, :443 egress)             │      ADLS Gen2 (abfss://)
-                                                     │      Tableflow BYOS container
-                                                     │      (SAS vending via MI/SP)
+        │                                            ├── metadata/RBAC ──► postgres
+        │                                            ├── direct HTTPS ───► Tableflow
+        │                                            └── delegation-key request
+        │                                                                      │
+        └──────────────── data read with vended SAS ─────────────────► ADLS Gen2
+                                                               BYOS container
 ```
 
-## nginx egress proxy (the user's existing nginx)
+## Direct network path
 
-Polaris's outbound calls to Tableflow go through nginx on 443. Requirements:
-
-```nginx
-location /iceberg/ {
-    proxy_pass https://tableflow.eastus2.azure.confluent.cloud;
-    proxy_ssl_server_name on;                                    # SNI
-    proxy_set_header Host tableflow.eastus2.azure.confluent.cloud;
-    # Authorization request header is forwarded unchanged by default; don't clear it
-    proxy_request_buffering off;
-    # do NOT rewrite bodies — Tableflow /v1/config may return absolute URLs
-}
-```
-
-- The Polaris container must resolve and reach the nginx hostname on 443
-  (`TABLEFLOW_PROXY_BASE_URL`), and nginx's cert must be publicly trusted.
-- Caveat: if Tableflow's `/v1/config` response contains a `uri` override or
-  absolute URLs, clients may bypass the nginx proxy — `scripts/check-tableflow.sh`
-  prints the config response so you can spot this.
-- `TABLEFLOW_PROXY_BASE_URL` can also be set to
-  `https://tableflow.eastus2.azure.confluent.cloud` to bypass nginx entirely.
+Polaris and its helper scripts connect directly to
+`https://tableflow.eastus2.azure.confluent.cloud` on TCP 443. Configure DNS,
+outbound NSG rules, and any Azure NAT/firewall rules for that connection.
+There is no proxy in the request path.
 
 ## Azure / Confluent prerequisites
 
-1. **VM**: Ubuntu LTS + Docker Engine & compose plugin. NSG: only 443 (and
-   admin SSH) inbound. **Port 8181 must NOT be public** — only nginx reaches it.
+1. **VM**: Ubuntu 26.04 LTS + Docker Engine & compose plugin. Restrict SSH and
+   Polaris port 8181 to approved inbound networks. Allow direct outbound TCP
+   443 to Tableflow and required Azure endpoints.
 2. **ADLS Gen2 storage account**: hierarchical namespace enabled, same region
    as the Kafka cluster; this is the Tableflow **BYOS** container. Tables in
    Confluent-managed storage cannot be read by Polaris.
-3. **Polaris identity** on the storage account: managed identity (recommended)
-   or service principal with **`Storage Blob Data Contributor`** — required for
-   issuing user-delegation SAS (`Reader` alone cannot mint SAS).
+3. **Polaris workload identity**: service principal (selected for this
+   deployment) with **`Storage Blob Data Contributor`** on the storage account.
+   The same service principal credentials can be reused across VMs and Polaris
+   installations that access the same permitted storage; configure its
+   `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` (`appId`), and `AZURE_CLIENT_SECRET` on
+   every installation. Polaris uses this identity to mint SAS tokens; clients
+   then access ADLS directly, without table data passing through the VM.
 4. **Confluent**: a Confluent Cloud API key/secret **scoped to Tableflow** with
    access to the environment; Tableflow topics configured for BYOS into that
    ADLS container.
@@ -84,7 +76,7 @@ docker compose up -d postgres
 ./scripts/bootstrap.sh                  # one-off: creates realm ISBUS + service_admin
 docker compose up -d                    # polaris on :8181
 
-./scripts/check-tableflow.sh            # sanity: nginx -> Tableflow, without Polaris
+./scripts/check-tableflow.sh            # sanity: direct Tableflow access, without Polaris
 ./scripts/setup-tableflow-federation.sh # creates EXTERNAL catalog + role/grant for M73580
 ./scripts/verify.sh                     # token -> config -> namespaces -> loadTable (SAS check)
 ```
@@ -92,11 +84,11 @@ docker compose up -d                    # polaris on :8181
 ## Troubleshooting
 
 - **Catalog create fails**: Polaris could not reach/authenticate to Tableflow
-  through nginx — the script prints the error body. Cross-check with
-  `./scripts/check-tableflow.sh` to isolate nginx/Tableflow vs Polaris issues.
+  directly — the script prints the error body. Cross-check with
+  `./scripts/check-tableflow.sh` to isolate Tableflow connectivity vs Polaris issues.
 - **401 from Tableflow**: bad API key/secret, or the key isn't scoped to
   Tableflow / lacks access to the environment.
-- **403 AuthorizationPermissionMismatch** on ADLS: Polaris identity missing
+- **403 AuthorizationPermissionMismatch** on ADLS: Polaris workload identity missing
   `Storage Blob Data Contributor`, or HNS ACLs block the path (RBAC takes a
   few minutes to propagate).
 - **loadTable returns no `adls.sas-token.*` keys**: credential vending not

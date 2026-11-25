@@ -27,7 +27,7 @@ Java installation is not required on the Azure VM.
 |---|---|---|
 | Docker Engine | Docker version selected by the Azure VM | Container runtime |
 | Docker Compose | Compose v2 | Service deployment and configuration |
-| Linux | Ubuntu 22.04 or 24.04 LTS recommended | Azure VM operating system |
+| Linux | Ubuntu 26.04 LTS recommended | Azure VM operating system |
 | Azure Linux VM | amd64 or arm64 | Host for the container deployment |
 
 The containers are isolated from the host Java and Python environments.
@@ -73,11 +73,16 @@ Polaris HTTP listeners:
 |---|---|---|
 | Azure Storage SDK | Azure SDK BOM 1.3.8 | Azure cloud integration |
 | Azure Data Lake Storage Gen2 | `abfss://` | External Tableflow storage location |
-| Azure managed identity or service principal | DefaultAzureCredential or configured credentials | Authenticate Polaris to Azure Storage |
+| Service principal | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` (`appId`), and `AZURE_CLIENT_SECRET` | Authenticate Polaris to request user-delegation keys and mint SAS credentials |
 | Azure Role: Storage Blob Data Contributor | Azure RBAC | Required for Polaris user-delegation SAS credential vending |
 
 Azure credentials are optional for Polaris startup but are required for ADLS
-credential vending and associated storage operations.
+credential vending. Polaris returns the resulting short-lived credentials to
+authorized query engines; the query engines access ADLS directly. The VM and
+Polaris do not proxy or transfer table data on behalf of those engines.
+The service principal can be reused by multiple Polaris installations when
+they access the same permitted storage scope. Each installation needs all
+three credential values; the App ID alone is not sufficient.
 
 ## External Catalog Federation
 
@@ -89,20 +94,22 @@ credential vending and associated storage operations.
 | Credential vending | Mints short-lived ADLS SAS credentials for query engines |
 
 Federation is live and read-only for Tableflow tables. Polaris does not copy
-Tableflow metadata or table data into its catalog database.
+Tableflow metadata or table data into its catalog database, and it does not
+proxy table-data access. Clients send catalog operations to Polaris, receive
+vended credentials as applicable, and connect directly to ADLS for data files.
 
 ## Optional Network Components
 
 | Component | Requirement |
 |---|---|
-| Nginx | Optional public TLS/reverse proxy and optional Tableflow egress proxy |
-| Azure Application Gateway, Front Door, or Load Balancer | Optional alternative ingress |
+| Azure NSG | Restricts direct inbound client access and permits outbound HTTPS |
 | Azure NAT Gateway or Azure Firewall | Optional outbound Internet access |
 | Public DNS | Required for public HTTPS hostnames |
 | Private DNS | Recommended for private hostnames |
 
-Nginx is not required by Polaris. It is only required if the deployment
-needs its routing, TLS termination, or proxy policy.
+This deployment connects clients, Polaris, Tableflow, and Azure endpoints
+directly. Network policy is enforced with NSG rules and any selected Azure
+outbound firewall or NAT service.
 
 ## Administration and Automation
 

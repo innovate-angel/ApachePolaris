@@ -140,6 +140,6 @@ cat <<OUT
 === Done ===
 Federated catalog : ${CATALOG} (type EXTERNAL -> Tableflow via ${CATALOG_URI})
 Administrator     : ${POLARIS_ROOT_CLIENT_ID} now reads it via 'service_admin' -> '${CATALOG_ROLE}'
-Next              : ./scripts/check-tableflow.sh   # sanity-check nginx->Tableflow directly
+Next              : ./scripts/check-tableflow.sh   # sanity-check direct VM->Tableflow access
                     ./scripts/verify.sh          # exercise the federated catalog through Polaris
 OUT

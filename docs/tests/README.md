@@ -30,7 +30,7 @@ only in an environment with the `.env` values populated.
 10. [External catalog creation](10-external-catalog-creation.md)
 11. [Catalog role and grants](11-catalog-role-and-grants.md)
 12. [Direct Tableflow connectivity](12-direct-tableflow-connectivity.md)
-13. [Nginx connectivity](13-nginx-connectivity.md)
+13. [NSG egress connectivity](13-nsg-egress-connectivity.md)
 14. [Namespace discovery](14-namespace-discovery.md)
 15. [Table discovery](15-table-discovery.md)
 16. [Credential vending](16-credential-vending.md)
