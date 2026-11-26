@@ -71,6 +71,7 @@ class FederationRestartTests(unittest.TestCase):
             COMPOSE_FILE="docker-compose.yml:tests/restart/compose.override.yml",
             COMPOSE_DISABLE_ENV_FILE="1",
             POLARIS_TEST_PORT=str(PORT),
+            POLARIS_BIND_ADDRESS="127.0.0.1",  # interpolated by the base file; ports are overridden
             POLARIS_TEST_MGMT_PORT=str(PORT + 1),
             POLARIS_URL=BASE,
             POLARIS_STATE_DIR=cls.state_dir,

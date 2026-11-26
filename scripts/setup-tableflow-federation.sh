@@ -41,11 +41,14 @@ STATE_DIR="${POLARIS_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/polaris}"
 SNAPSHOT="${STATE_DIR}/catalog-rbac-${REALM}-${CATALOG}.json"
 
 echo "==> Getting Polaris administrator token (${POLARIS_ROOT_CLIENT_ID}) from ${POLARIS_URL}"
-resp="$("${CURL[@]}" -X POST "${POLARIS_URL}/api/catalog/v1/oauth/tokens" \
+# The secret is passed on stdin so it never appears in the process list, and the
+# response is not echoed on failure.
+TOKEN="$(printf %s "$POLARIS_ROOT_CLIENT_SECRET" | "${CURL[@]}" -X POST "${POLARIS_URL}/api/catalog/v1/oauth/tokens" \
   -H "Polaris-Realm: ${REALM}" \
-  -d "grant_type=client_credentials&client_id=${POLARIS_ROOT_CLIENT_ID}&client_secret=${POLARIS_ROOT_CLIENT_SECRET}&scope=PRINCIPAL_ROLE:ALL")"
-TOKEN="$(jq -r .access_token <<<"$resp")"
-[[ "$TOKEN" != "null" && -n "$TOKEN" ]] || { echo "ERROR: token request failed: $resp"; exit 1; }
+  --data-urlencode grant_type=client_credentials --data-urlencode "client_id=${POLARIS_ROOT_CLIENT_ID}" \
+  --data-urlencode client_secret@- --data-urlencode scope=PRINCIPAL_ROLE:ALL \
+  | jq -r '.access_token // empty')" || TOKEN=""
+[[ -n "$TOKEN" ]] || { echo "ERROR: administrator token request to ${POLARIS_URL} failed" >&2; exit 1; }
 AUTH=(-H "Authorization: Bearer ${TOKEN}" -H "Polaris-Realm: ${REALM}")
 
 # request <method> <url> [json-body] -> sets $code and $body

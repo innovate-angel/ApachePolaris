@@ -46,6 +46,17 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assertIn("8181:8181", text)
         self.assertIn("127.0.0.1:8182:8182", text)
 
+    def test_polaris_http_port_is_not_published_on_all_interfaces(self):
+        text = (ROOT / "docker-compose.yml").read_text()
+        self.assertIn("${POLARIS_BIND_ADDRESS:?", text)
+        self.assertNotRegex(text, r'(?m)^\s*- "(0\.0\.0\.0:)?8181:8181"')
+
+    def test_scripts_never_put_client_secrets_on_the_command_line(self):
+        # Secrets in curl arguments are visible to every local user via ps/proc.
+        for path in (ROOT / "scripts").glob("*.sh"):
+            text = path.read_text()
+            self.assertNotRegex(text, r"client_secret=\$", str(path))
+
     def test_compose_uses_jdbc_pool_settings(self):
         text = (ROOT / "docker-compose.yml").read_text()
         self.assertIn("QUARKUS_DATASOURCE_DB_KIND: postgresql", text)
@@ -78,7 +89,7 @@ class RepositoryStructureTests(unittest.TestCase):
                 "-c",
                 'set +e +u +o pipefail; before="$-:$SHELLOPTS"; '
                 'az() { if [[ "$1" == login ]]; then return 0; fi; printf "secret\\n"; }; '
-                'export VAULT_NAME=test-vault AZURE_TENANT_ID=tenant AZURE_CLIENT_ID=client '
+                'export VAULT_NAME=test-vault POLARIS_BIND_ADDRESS=127.0.0.1 AZURE_TENANT_ID=tenant AZURE_CLIENT_ID=client '
                 'AZURE_STORAGE_ACCOUNT=storage AZURE_STORAGE_CONTAINER=container '
                 'TABLEFLOW_ORG_ID=org TABLEFLOW_ENV_ID=env; '
                 'source "$1"; after="$-:$SHELLOPTS"; '
@@ -106,7 +117,7 @@ class RepositoryStructureTests(unittest.TestCase):
                     fi
                     printf 'test-secret\\n'
                 }
-                export VAULT_NAME=test-vault IDENTITY_CLIENT_ID=vm-identity
+                export VAULT_NAME=test-vault IDENTITY_CLIENT_ID=vm-identity POLARIS_BIND_ADDRESS=127.0.0.1
                 export AZURE_TENANT_ID=tenant AZURE_CLIENT_ID=polaris-app
                 export AZURE_STORAGE_ACCOUNT=storage AZURE_STORAGE_CONTAINER=container
                 export TABLEFLOW_ORG_ID=org TABLEFLOW_ENV_ID=env
