@@ -216,7 +216,8 @@ class FederationRestartTests(unittest.TestCase):
         self.assertEqual(body["namespaces"], [["lkc-test"]])
 
     def assert_no_journal(self):
-        self.assertEqual(os.listdir(self.state_dir), [])
+        # The lock file is permanent by design; only a leftover journal is an error.
+        self.assertEqual([name for name in os.listdir(self.state_dir) if name != ".lock"], [])
 
     def test_restart_then_setup_restores_federation_and_rbac(self):
         self.assert_federation_works()
