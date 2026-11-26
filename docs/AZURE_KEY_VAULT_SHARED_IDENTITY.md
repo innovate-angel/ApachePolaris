@@ -109,6 +109,7 @@ Recommended secret names:
 | Environment variable | Key Vault secret |
 |---|---|
 | `POSTGRES_PASSWORD` | `polaris-postgres-password` |
+| `POLARIS_DB_PASSWORD` | `polaris-postgres-app-password` |
 | `POLARIS_ROOT_CLIENT_SECRET` | `polaris-root-client-secret` |
 | `POLARIS_TOKEN_BROKER_SECRET` | `polaris-token-broker-secret` |
 | `AZURE_CLIENT_SECRET` | `polaris-azure-client-secret` |

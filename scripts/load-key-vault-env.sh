@@ -43,6 +43,7 @@ load_secret() {
 }
 
 load_secret POSTGRES_PASSWORD polaris-postgres-password
+load_secret POLARIS_DB_PASSWORD polaris-postgres-app-password
 load_secret POLARIS_ROOT_CLIENT_SECRET polaris-root-client-secret
 load_secret POLARIS_TOKEN_BROKER_SECRET polaris-token-broker-secret
 load_secret AZURE_CLIENT_SECRET polaris-azure-client-secret
@@ -50,6 +51,7 @@ load_secret TABLEFLOW_API_KEY polaris-tableflow-api-key
 load_secret TABLEFLOW_API_SECRET polaris-tableflow-api-secret
 
 export POSTGRES_USER="${POSTGRES_USER:-M73581}"
+export POLARIS_DB_USER="${POLARIS_DB_USER:-polaris_app}"
 export POLARIS_ROOT_CLIENT_ID="${POLARIS_ROOT_CLIENT_ID:-M73580}"
 export POLARIS_REALM="${POLARIS_REALM:-ISBUS}"
 export TABLEFLOW_PROXY_BASE_URL="${TABLEFLOW_PROXY_BASE_URL:-https://tableflow.eastus2.azure.confluent.cloud}"
