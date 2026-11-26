@@ -3,8 +3,9 @@
 # ${BACKUP_DIR}/polaris-<UTC timestamp>.dump in pg_dump custom format and
 # deletes dumps older than ${BACKUP_RETENTION_DAYS} days.
 # Restore: pg_restore --clean --if-exists -d POLARIS <file>
-# Copy BACKUP_DIR off the VM (for example to Blob storage); a backup on the
-# same disk as the database does not survive the loss of the VM.
+# When BACKUP_STORAGE_ACCOUNT is set, each dump is also uploaded to the
+# ${BACKUP_CONTAINER:-polaris-backups} blob container using the VM's managed
+# identity (IDENTITY_CLIENT_ID), so backups survive the loss of the VM.
 set -euo pipefail
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/polaris}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
@@ -27,4 +28,19 @@ docker exec "$container" sh -c 'pg_dump -U "$POSTGRES_USER" -d POLARIS -Fc' >"${
 mv "${target}.tmp" "$target"
 echo "Wrote $target"
 
+# Prune before uploading so a failing upload cannot fill the disk.
 find "$BACKUP_DIR" -maxdepth 1 -name 'polaris-*.dump' -type f -mtime "+${BACKUP_RETENTION_DAYS}" -print -delete
+
+if [[ -n "${BACKUP_STORAGE_ACCOUNT:-}" ]]; then
+  login_args=(--identity --allow-no-subscriptions)
+  [[ -n "${IDENTITY_CLIENT_ID:-}" ]] && login_args+=(--client-id "$IDENTITY_CLIENT_ID")
+  az login "${login_args[@]}" >/dev/null || { echo "ERROR: managed-identity login failed; $target was not uploaded" >&2; exit 1; }
+  az storage blob upload --auth-mode login --only-show-errors --output none \
+    --account-name "$BACKUP_STORAGE_ACCOUNT" --container-name "${BACKUP_CONTAINER:-polaris-backups}" \
+    --name "$(basename "$target")" --file "$target" \
+    || { echo "ERROR: upload of $target failed" >&2; exit 1; }
+  echo "Uploaded $(basename "$target") to $BACKUP_STORAGE_ACCOUNT/${BACKUP_CONTAINER:-polaris-backups}"
+else
+  echo "WARNING: BACKUP_STORAGE_ACCOUNT is not set; the backup exists only on this VM" >&2
+fi
+

@@ -193,7 +193,7 @@ unchanged.
 - Enable soft delete and purge protection on Key Vault.
 - Restrict Key Vault network access and authorize the VM's outbound route.
 - Rotate application secrets with the per-secret procedure in the
-  [installation runbook](./install_instructions_polaris_container.md#rotate-secrets).
+  [installation runbook](./install_instructions_polaris_container.md#step-13-change-secrets-rotation).
   Changing only the Key Vault value is not enough for the PostgreSQL password
   or the administrator secret, and a Compose `restart` does not load new
   values into a container.

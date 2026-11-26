@@ -63,3 +63,7 @@ for v in POLARIS_BIND_ADDRESS AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_STORAGE_ACCO
     return 1
   fi
 done
+
+# Port 8181 is published only on POLARIS_BIND_ADDRESS, which is usually the VM
+# private IP rather than localhost.
+export POLARIS_URL="${POLARIS_URL:-http://${POLARIS_BIND_ADDRESS}:8181}"
