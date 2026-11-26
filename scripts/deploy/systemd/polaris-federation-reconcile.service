@@ -1,0 +1,13 @@
+[Unit]
+Description=Restore the Polaris -> Tableflow federated catalog connection
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust to the checkout location and the deployment's environment file
+# (non-secret settings only; secrets come from Key Vault).
+WorkingDirectory=/opt/polaris
+EnvironmentFile=/etc/polaris/deployment.env
+ExecStart=/bin/bash /opt/polaris/scripts/reconcile-federation.sh
