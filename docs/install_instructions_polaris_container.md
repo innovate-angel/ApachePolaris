@@ -52,6 +52,11 @@ the person who does to do that step with you.
   existing reverse proxy).
 - [ ] Outbound internet access for the VM as listed in step 1.
 
+**The VM image** (provided by whoever builds your VMs)
+
+- [ ] Ubuntu with **Docker Engine and the Docker Compose v2 plugin**
+  installed, and your user allowed to use `sudo`.
+
 **Accounts this installation creates for you** (fixed defaults; you do not
 choose them):
 
@@ -141,7 +146,7 @@ secrets, and configure Tableflow in Confluent Cloud.
 
 **Outbound access the VM needs** (ask your network team if outbound traffic is
 restricted): HTTPS (443) to Ubuntu package mirrors, `packages.microsoft.com`,
-`download.docker.com`, Docker Hub, GitHub, `login.microsoftonline.com`,
+Docker Hub, GitHub, `login.microsoftonline.com`,
 `management.azure.com`, `<vault-name>.vault.azure.net`,
 `tableflow.<region>.azure.confluent.cloud`, and
 `<storage-account>.blob.core.windows.net` / `.dfs.core.windows.net`; plus HTTP
@@ -269,39 +274,60 @@ Role assignments can take up to 10 minutes to start working.
 Connect to the VM with SSH (or Bastion) as `<vm-user>` and run every command
 below in that session. Copy and paste each block exactly as shown.
 
-## Step 5. Install software — *VM*
+## Step 5. Prepare the VM software — *VM*
 
-**5a. Basic tools and Azure CLI**
+Docker is already on the VM image. You install the basic tools and Azure CLI,
+then check that Docker is ready.
+
+**5a. Basic tools**
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y ca-certificates curl git gnupg jq
-curl -fsSL https://aka.ms/InstallAzureCLIDeb | sudo bash
 ```
 
-**5b. Docker**
+**5b. Azure CLI** (from Microsoft's signed package repository; paste the whole
+block)
 
 ```bash
-curl -fsSL https://get.docker.com | sudo sh
-sudo systemctl enable --now docker
-sudo usermod -aG docker "$USER"
+(
+  set -euo pipefail
+  codename="$(. /etc/os-release && printf '%s' "$VERSION_CODENAME")"
+  arch="$(dpkg --print-architecture)"
+  sudo install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://packages.microsoft.com/keys/microsoft.asc |
+    gpg --dearmor | sudo tee /etc/apt/keyrings/microsoft.gpg >/dev/null
+  sudo chmod a+r /etc/apt/keyrings/microsoft.gpg
+  printf '%s
+' "Types: deb" "URIs: https://packages.microsoft.com/repos/azure-cli/"     "Suites: $codename" "Components: main" "Architectures: $arch"     "Signed-By: /etc/apt/keyrings/microsoft.gpg" |
+    sudo tee /etc/apt/sources.list.d/azure-cli.sources >/dev/null
+  sudo apt-get update
+  sudo apt-get install -y azure-cli
+)
+az version --output none && echo "az OK"
 ```
 
-Membership of the `docker` group is effectively root access on the VM: add only
-trusted administrators. **Now log out and SSH in again** so the Docker
-permission takes effect.
+✅ **Expected:** `az OK`. If `apt-get update` says the Microsoft repository
+"does not have a Release file", Microsoft has not published Azure CLI for this
+Ubuntu version yet: stop and ask for help rather than working around it.
 
-**5c. Check everything is installed**
+**5c. Check Docker** (already installed; do not reinstall it)
 
 ```bash
-git --version && jq --version && az version --output none && echo "az OK"
-docker run --rm hello-world | grep -m1 "Hello from Docker"
 docker compose version
+docker info --format 'Docker {{.ServerVersion}}'
+docker run --rm hello-world | grep -m1 "Hello from Docker"
+systemctl is-enabled docker
 ```
 
-✅ **Expected:** version numbers, `az OK`, `Hello from Docker!`, and a Docker
-Compose version. If `docker` says "permission denied", you did not log out and
-back in.
+✅ **Expected**, line by line:
+
+| Output | If not |
+|---|---|
+| `Docker Compose version v2.20.0` or newer | Ask the VM image owner to update the Docker Compose plugin |
+| `Docker <version>` | `permission denied`: run `sudo usermod -aG docker "$USER"`, then **log out and SSH in again**. Membership of the `docker` group is effectively root access: add only trusted administrators |
+| `Hello from Docker!` | The VM cannot reach Docker Hub: check outbound access (step 1) |
+| `enabled` | Run `sudo systemctl enable docker` so Polaris comes back after a reboot |
 
 ## Step 6. Download the project — *VM*
 
@@ -525,7 +551,7 @@ cd ~/ApachePolaris && set -a && source /etc/polaris/deployment.env && set +a
 
 | Problem | What to do |
 |---|---|
-| `permission denied` from `docker` | Log out and SSH in again (step 5b) |
+| `permission denied` from `docker` | Add yourself to the `docker` group, then log out and SSH in again (step 5c) |
 | `PREFLIGHT` fails, managed identity or Key Vault `403` | Identity attached to the VM? **Key Vault Secrets User** assigned? Waited 10 minutes? Secret names exactly as in step 4a? |
 | `... is not set as a shell environment variable` | You skipped the settings line, or a line in `/etc/polaris/deployment.env` is empty |
 | Polaris not healthy | `./scripts/compose.sh logs --tail 100 polaris postgres` |
@@ -662,6 +688,11 @@ sudo systemctl start polaris-backup.service && journalctl -u polaris-backup -n 5
 update **both** Polaris image tags in `docker-compose.yml` together, then run
 step 8. Do not change the PostgreSQL major version (17) without a planned
 migration.
+
+**Update Docker or Ubuntu packages** (`sudo apt-get update && sudo apt-get
+upgrade`). Updating Docker restarts the containers; Polaris starts again by
+itself and the recovery timer restores the Tableflow connection within about
+5 minutes. Check afterwards with `journalctl -u polaris-federation-reconcile -n 40`.
 
 **Never** run `docker compose down -v`: it deletes the database.
 
