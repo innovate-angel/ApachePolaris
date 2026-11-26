@@ -212,7 +212,9 @@ sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
 ```
 
-**Now log out and SSH in again** so the Docker permission takes effect.
+Membership of the `docker` group is effectively root access on the VM: add only
+trusted administrators. **Now log out and SSH in again** so the Docker
+permission takes effect.
 
 **5c. Check everything is installed**
 
@@ -392,7 +394,8 @@ settings line from step 7):
 
 ✅ **Expected:** the output ends with **Client ID** and **Client secret**.
 **The secret is shown only once.** Store it in the engine's secret store now.
-Never give an engine the Polaris admin secret.
+Never give an engine the Polaris admin secret, and never grant it the
+`tableflow_reader` catalog role: despite its name, that role can change content.
 
 **11b. Configure the engine** with these settings:
 
@@ -554,14 +557,31 @@ sudo systemctl start polaris-backup.service && journalctl -u polaris-backup -n 5
 1. Pick the file: `sudo ls /var/backups/polaris`. If the VM was lost, download
    it from the `polaris-backups` container in the Azure Portal and copy it to
    the new VM first.
-2. Run (replace the file name):
+2. Restore the database (change the file name on the first line). The block
+   stops at the first error and restores everything or nothing:
 
    ```bash
-   ./scripts/compose.sh up -d --wait postgres
-   ./scripts/compose.sh stop polaris
-   sudo cat /var/backups/polaris/polaris-<time>.dump |
-     docker exec -i "$(docker ps -q --filter label=com.docker.compose.service=postgres)" \
-       sh -c 'pg_restore --clean --if-exists -U "$POSTGRES_USER" -d POLARIS'
+   (
+     set -euo pipefail
+     dump=/var/backups/polaris/polaris-<time>.dump
+     sudo test -s "$dump" || { echo "ERROR: $dump not found or empty"; exit 1; }
+     ./scripts/compose.sh up -d --wait postgres
+     ./scripts/compose.sh stop polaris
+     pg="$(docker ps -q --filter label=com.docker.compose.project=polaris \
+                        --filter label=com.docker.compose.service=postgres)"
+     sudo cat "$dump" | docker exec -i "$pg" \
+       sh -c 'pg_restore --clean --if-exists --single-transaction -U "$POSTGRES_USER" -d POLARIS'
+     echo "RESTORE OK"
+   )
+   ```
+
+   ✅ **Expected:** `RESTORE OK`. If you see an error instead, stop: Polaris
+   is still stopped and the database is unchanged. Fix the cause and run the
+   block again.
+
+3. **Only after `RESTORE OK`**, start Polaris again:
+
+   ```bash
    ./scripts/deploy-from-key-vault.sh; echo "EXIT CODE: $?"
    ```
 

@@ -28,6 +28,9 @@ docker exec "$container" sh -c 'pg_dump -U "$POSTGRES_USER" -d POLARIS -Fc' >"${
 mv "${target}.tmp" "$target"
 echo "Wrote $target"
 
+# Prune before uploading so a failing upload cannot fill the disk.
+find "$BACKUP_DIR" -maxdepth 1 -name 'polaris-*.dump' -type f -mtime "+${BACKUP_RETENTION_DAYS}" -print -delete
+
 if [[ -n "${BACKUP_STORAGE_ACCOUNT:-}" ]]; then
   login_args=(--identity --allow-no-subscriptions)
   [[ -n "${IDENTITY_CLIENT_ID:-}" ]] && login_args+=(--client-id "$IDENTITY_CLIENT_ID")
@@ -41,4 +44,3 @@ else
   echo "WARNING: BACKUP_STORAGE_ACCOUNT is not set; the backup exists only on this VM" >&2
 fi
 
-find "$BACKUP_DIR" -maxdepth 1 -name 'polaris-*.dump' -type f -mtime "+${BACKUP_RETENTION_DAYS}" -print -delete
