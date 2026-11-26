@@ -59,6 +59,13 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assertNotIn("apache/polaris:latest", text)
         self.assertNotIn("apache/polaris-admin-tool:latest", text)
 
+    def test_all_images_are_digest_pinned(self):
+        text = (ROOT / "docker-compose.yml").read_text()
+        images = re.findall(r"(?m)^\s*image:\s*(\S+)", text)
+        self.assertTrue(images)
+        for image in images:
+            self.assertRegex(image, r"^[^@\s]+:[^@\s]+@sha256:[0-9a-f]{64}$", image)
+
     def test_deploy_entrypoint_runs_full_workflow(self):
         text = (ROOT / "scripts/deploy-from-key-vault.sh").read_text()
         for script in ("bootstrap.sh", "check-tableflow.sh",

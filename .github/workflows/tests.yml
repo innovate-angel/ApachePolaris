@@ -2,7 +2,15 @@ name: Polaris deployment tests
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   unit:
@@ -12,3 +20,59 @@ jobs:
       - run: cp .env.example .env
       - run: make compose-validate
       - run: make test-unit
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # shellcheck is preinstalled on ubuntu-latest runners.
+      - run: shellcheck --version && shellcheck -x scripts/*.sh
+
+  integration:
+    # Boots the real stack (PostgreSQL + bootstrap + Polaris) with throwaway
+    # secrets and runs tests/integration against it. No Azure or Confluent access.
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write throwaway .env
+        run: |
+          cp .env.example .env
+          sed -i \
+            -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 24)|" \
+            -e "s|^POLARIS_ROOT_CLIENT_SECRET=.*|POLARIS_ROOT_CLIENT_SECRET=$(openssl rand -hex 24)|" \
+            -e "s|^POLARIS_TOKEN_BROKER_SECRET=.*|POLARIS_TOKEN_BROKER_SECRET=$(openssl rand -base64 48 | tr -d '\n')|" \
+            .env
+          # Harmless before POLARIS_BIND_ADDRESS exists; required after it does.
+          grep -q '^POLARIS_BIND_ADDRESS=' .env || echo 'POLARIS_BIND_ADDRESS=127.0.0.1' >> .env
+      - name: Start PostgreSQL
+        run: docker compose up -d --wait postgres
+      - name: Bootstrap realm
+        run: docker compose --profile bootstrap run --rm polaris-bootstrap
+      - name: Start Polaris
+        run: docker compose up -d --wait polaris
+      - name: Integration tests
+        run: |
+          set -a; . ./.env; set +a
+          make test-integration
+      - name: Bootstrap is idempotent
+        run: |
+          set -a; . ./.env; set +a
+          ./scripts/bootstrap.sh
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=300
+      - name: Tear down
+        if: always()
+        run: docker compose --profile bootstrap down -v
+
+  restart:
+    # Guards the known Polaris 1.9.0 restart problem: the federated catalog loses
+    # its in-memory secret and setup-tableflow-federation.sh must restore it.
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: make test-restart
