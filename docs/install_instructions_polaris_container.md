@@ -18,6 +18,53 @@ files directly from Azure Data Lake Storage (ADLS).
 
 ---
 
+## Before you start — what you need
+
+Check every box before step 1. If you do not have a permission yourself, ask
+the person who does to do that step with you.
+
+**Accounts and permissions**
+
+- [ ] **Azure:** a subscription and a resource group you can create resources
+  in (VM, storage account, Key Vault, managed identity), and permission to
+  assign roles on them (**Owner** or **User Access Administrator** on the
+  resource group).
+- [ ] **Microsoft Entra ID:** permission to create an **App registration** and
+  a client secret.
+- [ ] **Confluent Cloud:** an organization with a Kafka cluster **on Azure**
+  that supports Tableflow, and permission to create a provider integration,
+  enable Tableflow on a topic, and create an API key for a service account.
+
+**On your computer**
+
+- [ ] An **SSH key pair** (for example from `ssh-keygen -t ed25519`) — you
+  paste the public key in step 1.
+- [ ] A way to run `openssl` (Linux, macOS, WSL, or Azure Cloud Shell) for
+  generating secrets in step 4.
+- [ ] A private, secure place for notes (the worksheet below). Never paste
+  secrets into it.
+
+**Agreed with your network/security team** (needed by step 10, not before)
+
+- [ ] A **hostname** for users (for example `polaris.yourcompany.com`), a DNS
+  record for it, and a **trusted TLS certificate** for that name.
+- [ ] Which **HTTPS gateway** fronts Polaris (Azure Application Gateway or an
+  existing reverse proxy).
+- [ ] Outbound internet access for the VM as listed in step 1.
+
+**Accounts this installation creates for you** (fixed defaults; you do not
+choose them):
+
+| Name | What it is | Its password/secret |
+|---|---|---|
+| `M73581` | PostgreSQL admin (setup and backups only) | Key Vault `polaris-postgres-password` |
+| `polaris_app` | PostgreSQL account Polaris uses (not an admin) | Key Vault `polaris-postgres-app-password` |
+| `M73580` | Polaris administrator (client ID) | Key Vault `polaris-root-client-secret` |
+| `ISBUS` | Polaris realm name | — |
+| `tableflow` | Name of the catalog users query | — |
+
+---
+
 ## Step 0. Fill in your values worksheet
 
 Copy this table into a private note and fill it in as you go. Every
@@ -26,6 +73,8 @@ in this table** — they go straight into Key Vault in step 4.
 
 | Placeholder | What it is | Found in step | Your value |
 |---|---|---|---|
+| `<resource-group>` | Azure resource group for everything below | 1 | |
+| `<region>` | Azure region, same as the Kafka cluster (for example `eastus2`) | 1 | |
 | `<vm-name>` | VM name | 1 | |
 | `<vm-private-ip>` | VM private IP address | 1 | |
 | `<vm-user>` | Linux user you SSH in as (for example `azureuser`) | 1 | |
@@ -33,11 +82,33 @@ in this table** — they go straight into Key Vault in step 4.
 | `<storage-container>` | Tableflow container name | 2 | |
 | `<tenant-id>` | Polaris app Directory (tenant) ID | 2 | |
 | `<polaris-app-client-id>` | Polaris app Application (client) ID | 2 | |
+| `<app-secret-expiry>` | Expiry date of the Polaris app client secret (set a reminder) | 2 | |
 | `<tableflow-org-id>` | Tableflow organization ID | 3 | |
 | `<tableflow-env-id>` | Tableflow environment ID | 3 | |
+| `<tableflow-host>` | Tableflow endpoint host, for example `https://tableflow.eastus2.azure.confluent.cloud` | 3 | |
+| `<confluent-service-account>` | Confluent service account that owns the Tableflow API key | 3 | |
 | `<vault-name>` | Key Vault name | 4 | |
 | `<identity-client-id>` | Managed identity **Client ID** | 4 | |
 | `<backup-storage-account>` | Storage account for backups (can be the same as above) | 4 | |
+| `<gateway-hostname>` | Hostname users connect to (from your network team) | 10 | |
+| `<engine-login>` | Name for each query engine's Polaris login (for example `spark-prod`) | 11 | |
+
+**Secrets checklist.** You will put exactly these **seven** secrets into Key
+Vault in step 4. Tick each one when it is stored:
+
+| ✔ | Key Vault secret name | Where the value comes from |
+|---|---|---|
+| ☐ | `polaris-postgres-password` | You generate it (step 4a) |
+| ☐ | `polaris-postgres-app-password` | You generate it (step 4a) |
+| ☐ | `polaris-root-client-secret` | You generate it (step 4a) |
+| ☐ | `polaris-token-broker-secret` | You generate it (step 4a) |
+| ☐ | `polaris-azure-client-secret` | Entra app client secret **Value** (step 2b) |
+| ☐ | `polaris-tableflow-api-key` | Confluent Tableflow API key (step 3) |
+| ☐ | `polaris-tableflow-api-secret` | Confluent Tableflow API secret (step 3) |
+
+One more secret appears later and is **not** stored in Key Vault: each query
+engine's client secret from step 11. It is shown once; store it in that
+engine's own secret store.
 
 ---
 
@@ -50,7 +121,7 @@ secrets, and configure Tableflow in Confluent Cloud.
 ## Step 1. Create the VM — *Azure Portal*
 
 1. Go to **Virtual machines → Create → Azure virtual machine**.
-2. Choose:
+2. Choose **Resource group** `<resource-group>`, **Region** `<region>`, then:
    - **Image:** Ubuntu Server 26.04 LTS
    - **Size:** at least 2 vCPU, 4 GB RAM (for example `Standard_B2s`)
    - **Authentication:** SSH public key
@@ -124,20 +195,22 @@ read access to the table files)
    https://tableflow.eastus2.azure.confluent.cloud/iceberg/catalog/organizations/<org-id>/environments/<env-id>
    ```
 
-   Write down `<tableflow-org-id>` and `<tableflow-env-id>`. If your region is
-   not `eastus2`, also note the host (`https://tableflow.<region>.azure.confluent.cloud`).
+   Write down `<tableflow-org-id>`, `<tableflow-env-id>` and the host part
+   (`<tableflow-host>`, everything before `/iceberg`).
 4. Still in **API access**, click **Create API key**. Choose a service account
    that can read this Tableflow catalog and pick **Tableflow** as the scope.
    Copy the **key** and **secret** — they go into Key Vault in step 4. Do not
-   use a Kafka cluster key.
+   use a Kafka cluster key. Write down the service account name
+   (`<confluent-service-account>`).
 
 ## Step 4. Key Vault, VM identity and backup storage — *Azure Portal*
 
 **4a. Key Vault and secrets**
 
 1. Go to **Key vaults → Create** (or open the existing vault). On **Access
-   configuration**, choose **Azure role-based access control**. Write down
-   `<vault-name>`.
+   configuration**, choose **Azure role-based access control**. On
+   **Networking**, allow access from the VM's virtual network (or all networks
+   if your policy allows). Write down `<vault-name>`.
 2. Give yourself permission to add secrets: on the vault, **Access control
    (IAM) → Add role assignment → Key Vault Secrets Officer** → yourself.
 3. Generate four random values on your own computer (Linux, macOS, WSL or
@@ -263,14 +336,13 @@ The scripts and the automatic timers both read it. Secrets never go in it.
    AZURE_CLIENT_ID=<polaris-app-client-id>
    AZURE_STORAGE_ACCOUNT=<storage-account>
    AZURE_STORAGE_CONTAINER=<storage-container>
-   TABLEFLOW_PROXY_BASE_URL=https://tableflow.eastus2.azure.confluent.cloud
+   TABLEFLOW_PROXY_BASE_URL=<tableflow-host>
    TABLEFLOW_ORG_ID=<tableflow-org-id>
    TABLEFLOW_ENV_ID=<tableflow-env-id>
    BACKUP_STORAGE_ACCOUNT=<backup-storage-account>
    BACKUP_CONTAINER=polaris-backups
    ```
 
-   Change `TABLEFLOW_PROXY_BASE_URL` if your Tableflow region is not East US 2.
    Save with **Ctrl+O, Enter**, exit with **Ctrl+X**.
 
 3. Load the settings into your session. **Run this line every time you open a
@@ -391,7 +463,7 @@ an HTTPS gateway (for example Azure Application Gateway).
 settings line from step 7):
 
 ```bash
-(set -e; source scripts/load-key-vault-env.sh; ./scripts/create-reader-principal.sh my-spark-engine)
+(set -e; source scripts/load-key-vault-env.sh; ./scripts/create-reader-principal.sh <engine-login>)
 ```
 
 ✅ **Expected:** the output ends with **Client ID** and **Client secret**.
@@ -529,7 +601,7 @@ switches to the new one):
 ```
 
 **C. New secret for a query engine login** (the old secret stops working
-immediately; replace `my-spark-engine` with the login name):
+immediately; replace `<engine-login>` with the login name):
 
 ```bash
 (
@@ -542,7 +614,7 @@ immediately; replace `my-spark-engine` with the login name):
       --data-urlencode "client_id=$POLARIS_ROOT_CLIENT_ID" \
       --data-urlencode client_secret@- \
       --data-urlencode scope=PRINCIPAL_ROLE:ALL | jq -r .access_token)"
-  curl -fsS -X POST "$polaris/api/management/v1/principals/my-spark-engine/reset" \
+  curl -fsS -X POST "$polaris/api/management/v1/principals/<engine-login>/reset" \
     -H "Authorization: Bearer $token" -H "Polaris-Realm: $POLARIS_REALM" | jq .credentials
 )
 ```
@@ -592,3 +664,23 @@ step 8. Do not change the PostgreSQL major version (17) without a planned
 migration.
 
 **Never** run `docker compose down -v`: it deletes the database.
+
+---
+
+## Go-live checklist
+
+Do not let real users connect until every box is ticked:
+
+- [ ] Step 8 ended with `All checks passed.` (exit code 0).
+- [ ] Step 9: both timers listed; a backup is visible in the `polaris-backups`
+  container; the recovery test showed `ok (HTTP 200)`.
+- [ ] Step 14: one **test restore** done and step 8 passed afterwards.
+- [ ] Step 10: `https://<gateway-hostname>` answers `401` with no certificate
+  warning; port 8181 is open **only** to the gateway.
+- [ ] Step 11: each engine has its own login; the `CREATE NAMESPACE` test was
+  rejected.
+- [ ] Someone is alerted when `polaris-backup.service` or
+  `polaris-federation-reconcile.service` fails (for example Azure Monitor on
+  the VM's system log).
+- [ ] Calendar reminders exist for the Entra client secret expiry
+  (`<app-secret-expiry>`) and the Tableflow API key rotation.
