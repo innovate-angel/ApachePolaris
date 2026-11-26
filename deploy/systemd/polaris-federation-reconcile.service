@@ -6,6 +6,10 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# Run as the same account you use for ./scripts/deploy-from-key-vault.sh so both
+# share the recovery journal in ~/.local/state/polaris. It must be in the docker group.
+User=CHANGE_ME
+Group=docker
 # Adjust to the checkout location and the deployment's environment file
 # (non-secret settings only; secrets come from Key Vault).
 WorkingDirectory=/opt/polaris
