@@ -16,6 +16,7 @@ class RepositoryStructureTests(unittest.TestCase):
         required = (
             "POSTGRES_USER",
             "POSTGRES_PASSWORD",
+            "POLARIS_DB_PASSWORD",
             "POLARIS_ROOT_CLIENT_ID",
             "POLARIS_ROOT_CLIENT_SECRET",
             "POLARIS_TOKEN_BROKER_SECRET",
@@ -56,6 +57,12 @@ class RepositoryStructureTests(unittest.TestCase):
         for path in (ROOT / "scripts").glob("*.sh"):
             text = path.read_text()
             self.assertNotRegex(text, r"client_secret=\$", str(path))
+
+    def test_polaris_does_not_connect_as_the_postgres_superuser(self):
+        text = (ROOT / "docker-compose.yml").read_text()
+        self.assertNotIn("QUARKUS_DATASOURCE_USERNAME: ${POSTGRES_USER", text)
+        self.assertEqual(text.count("QUARKUS_DATASOURCE_USERNAME: ${POLARIS_DB_USER:-polaris_app}"), 2)
+        self.assertEqual(text.count("QUARKUS_DATASOURCE_PASSWORD: ${POLARIS_DB_PASSWORD:?"), 2)
 
     def test_compose_uses_jdbc_pool_settings(self):
         text = (ROOT / "docker-compose.yml").read_text()

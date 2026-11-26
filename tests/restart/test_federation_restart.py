@@ -80,6 +80,7 @@ class FederationRestartTests(unittest.TestCase):
             POLARIS_ROOT_CLIENT_SECRET=ADMIN_SECRET,
             POLARIS_TOKEN_BROKER_SECRET="cmVzdGFydC10ZXN0LXRva2VuLWJyb2tlci1zZWNyZXQtMDEyMzQ1Njc4OQ==",
             POSTGRES_PASSWORD="restart-test-postgres",
+            POLARIS_DB_PASSWORD="restart-test-polaris-db",
             AZURE_TENANT_ID="00000000-0000-0000-0000-000000000000",
             AZURE_STORAGE_ACCOUNT="restarttest",
             AZURE_STORAGE_CONTAINER="tableflow",
