@@ -46,8 +46,10 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      # Plain HTTP backend; restrict 8181 in the NSG to the TLS gateway.
-      - "8181:8181"
+      # Plain HTTP backend. Bind only to the address the TLS gateway reaches
+      # (the VM private IP) or 127.0.0.1 for a co-located gateway. Never 0.0.0.0:
+      # Docker-published ports bypass host firewalls such as ufw.
+      - "${POLARIS_BIND_ADDRESS:?Set POLARIS_BIND_ADDRESS to the VM private IP or 127.0.0.1}:8181:8181"
       # management/health port exposed on localhost only
       - "127.0.0.1:8182:8182"
     environment:

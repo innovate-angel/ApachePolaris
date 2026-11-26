@@ -251,6 +251,7 @@ but do not store secrets in it or rely on `.env`.
 ```bash
 export VAULT_NAME='<vault-name>'
 export IDENTITY_CLIENT_ID='<VM-managed-identity-client-id>'
+export POLARIS_BIND_ADDRESS='<VM-private-IP-reached-by-TLS-gateway>'  # or 127.0.0.1; never 0.0.0.0
 export AZURE_TENANT_ID='<Polaris-Entra-app-tenant-id>'
 export AZURE_CLIENT_ID='<Polaris-Entra-app-client-id>'
 export AZURE_STORAGE_ACCOUNT='<ADLS-account-name>'

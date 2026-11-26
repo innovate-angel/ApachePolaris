@@ -26,9 +26,10 @@ CATALOG="${POLARIS_CATALOG_NAME:-tableflow}"
 fail() { echo "FAILED: $*" >&2; exit 1; }
 
 echo "==> Administrator token (${POLARIS_ROOT_CLIENT_ID}) from ${BASE}"
-TOKEN="$("${CURL[@]}" -X POST "${BASE}/api/catalog/v1/oauth/tokens" \
+TOKEN="$(printf %s "$POLARIS_ROOT_CLIENT_SECRET" | "${CURL[@]}" -X POST "${BASE}/api/catalog/v1/oauth/tokens" \
   -H "Polaris-Realm: ${REALM}" \
-  -d "grant_type=client_credentials&client_id=${POLARIS_ROOT_CLIENT_ID}&client_secret=${POLARIS_ROOT_CLIENT_SECRET}&scope=PRINCIPAL_ROLE:ALL" \
+  --data-urlencode grant_type=client_credentials --data-urlencode "client_id=${POLARIS_ROOT_CLIENT_ID}" \
+  --data-urlencode client_secret@- --data-urlencode scope=PRINCIPAL_ROLE:ALL \
   | jq -r '.access_token // empty')" || TOKEN=""
 [[ -n "$TOKEN" ]] || fail "token request to ${BASE} failed"
 AUTH=(-H "Authorization: Bearer ${TOKEN}" -H "Polaris-Realm: ${REALM}")

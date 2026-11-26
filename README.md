@@ -49,7 +49,8 @@ There is no proxy in the request path.
 ## Client TLS
 
 The Compose stack does not terminate TLS: Polaris listens on plaintext HTTP at
-port 8181. In production, terminate client HTTPS at an approved TLS gateway
+port 8181, published only on `POLARIS_BIND_ADDRESS` (the VM private IP or
+127.0.0.1, never all interfaces). In production, terminate client HTTPS at an approved TLS gateway
 (for example, Azure Application Gateway or an organization-managed reverse
 proxy), and restrict the VM's inbound 8181 rule to that gateway. Clients should
 use the gateway's HTTPS hostname; do not expose plaintext 8181 to untrusted
@@ -88,6 +89,7 @@ git clone <this repo> && cd ApachePolaris
 # authenticates with the attached managed identity and loads secrets transiently.
 export VAULT_NAME="<key-vault-name>"
 export IDENTITY_CLIENT_ID="<user-assigned-managed-identity-client-id>"
+export POLARIS_BIND_ADDRESS="<vm-private-ip>"   # address the TLS gateway reaches; never 0.0.0.0
 export AZURE_TENANT_ID="<tenant-id>"
 export AZURE_CLIENT_ID="<polaris-service-principal-app-id>"
 export AZURE_STORAGE_ACCOUNT="<storage-account>"

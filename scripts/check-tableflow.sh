@@ -16,9 +16,11 @@ CATALOG_URI="${TABLEFLOW_CATALOG_URI:-${TABLEFLOW_PROXY_BASE_URL%/}/iceberg/cata
 TOKEN_URI="${TABLEFLOW_TOKEN_URI:-${CATALOG_URI}/v1/oauth/tokens}"
 
 echo "==> Token from ${TOKEN_URI}"
-data="grant_type=client_credentials&client_id=${TABLEFLOW_API_KEY}&client_secret=${TABLEFLOW_API_SECRET}"
-[[ -n "${TABLEFLOW_OAUTH_SCOPE:-}" ]] && data="${data}&scope=${TABLEFLOW_OAUTH_SCOPE}"
-TOKEN="$("${CURL[@]}" -X POST "${TOKEN_URI}" -d "$data" | jq -r .access_token)"
+# The secret is passed on stdin so it never appears in the process list.
+args=(--data-urlencode grant_type=client_credentials --data-urlencode "client_id=${TABLEFLOW_API_KEY}" --data-urlencode client_secret@-)
+[[ -n "${TABLEFLOW_OAUTH_SCOPE:-}" ]] && args+=(--data-urlencode "scope=${TABLEFLOW_OAUTH_SCOPE}")
+TOKEN="$(printf %s "$TABLEFLOW_API_SECRET" | "${CURL[@]}" -X POST "${TOKEN_URI}" "${args[@]}" | jq -r '.access_token // empty')"
+[[ -n "$TOKEN" ]] || { echo "ERROR: Tableflow token request to ${TOKEN_URI} failed" >&2; exit 1; }
 echo "    token: OK (${#TOKEN} chars)"
 
 echo "==> GET ${CATALOG_URI}/v1/config"
