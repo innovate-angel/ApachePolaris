@@ -10,4 +10,5 @@ Type=oneshot
 # (non-secret settings only; secrets come from Key Vault).
 WorkingDirectory=/opt/polaris
 Environment=BACKUP_DIR=/var/backups/polaris
+EnvironmentFile=-/etc/polaris/deployment.env
 ExecStart=/bin/bash /opt/polaris/scripts/backup-postgres.sh
