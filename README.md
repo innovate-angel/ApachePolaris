@@ -78,7 +78,7 @@ networks. Certificate provisioning and renewal belong to that gateway.
    ADLS container.
 5. **Bootstrap identity and Key Vault**: attach a user-assigned managed identity
    to the VM and grant it `Key Vault Secrets User` on the RBAC-enabled vault
-   containing the six deployment secrets.
+   containing the seven deployment secrets.
 
 ## Deploy
 

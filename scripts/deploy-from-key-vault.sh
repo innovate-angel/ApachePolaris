@@ -16,6 +16,7 @@ source scripts/load-key-vault-env.sh
 
 cleanup() {
   unset POSTGRES_PASSWORD \
+    POLARIS_DB_PASSWORD \
     POLARIS_ROOT_CLIENT_SECRET \
     POLARIS_TOKEN_BROKER_SECRET \
     AZURE_CLIENT_SECRET \

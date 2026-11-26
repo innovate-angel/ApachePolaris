@@ -140,21 +140,23 @@ read access to the table files)
    `<vault-name>`.
 2. Give yourself permission to add secrets: on the vault, **Access control
    (IAM) → Add role assignment → Key Vault Secrets Officer** → yourself.
-3. Generate three random values on your own computer (Linux, macOS, WSL or
+3. Generate four random values on your own computer (Linux, macOS, WSL or
    Azure Cloud Shell):
 
    ```bash
-   openssl rand -hex 32      # value 1: database password
+   openssl rand -hex 32      # value 1: database admin password
    openssl rand -hex 32      # value 2: Polaris admin secret
    openssl rand -base64 48   # value 3: token signing key
+   openssl rand -hex 32      # value 4: Polaris database password
    ```
 
 4. In the vault, open **Objects → Secrets → + Generate/Import** and create
-   these **six** secrets. The names must match exactly:
+   these **seven** secrets. The names must match exactly:
 
    | Secret name | Value |
    |---|---|
-   | `polaris-postgres-password` | Value 1 |
+   | `polaris-postgres-password` | Value 1. PostgreSQL admin; used only for setup and backups |
+   | `polaris-postgres-app-password` | Value 4. The database account Polaris itself uses (not an admin) |
    | `polaris-root-client-secret` | Value 2 |
    | `polaris-token-broker-secret` | Value 3. Never change it casually: changing it logs out every client |
    | `polaris-azure-client-secret` | App client secret **Value** from step 2b |
@@ -480,6 +482,7 @@ then run step 8 again. Some secrets need one extra step first:
 | Secret | Before running step 8 | After |
 |---|---|---|
 | `polaris-postgres-password` | Run **A** below | Brief outage while containers restart |
+| `polaris-postgres-app-password` | Nothing | Brief outage while PostgreSQL and Polaris restart |
 | `polaris-root-client-secret` | Keep the old version enabled, then run **B** below | Disable the old version |
 | `polaris-token-broker-secret` | Nothing | All clients must log in again |
 | `polaris-azure-client-secret` | Create the new client secret in Entra; keep the old one | When step 8 ends with `All checks passed.`, delete the old client secret in Entra |

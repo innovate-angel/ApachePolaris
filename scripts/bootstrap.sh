@@ -4,9 +4,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 REALM="${POLARIS_REALM:-ISBUS}"
 
-for v in POSTGRES_PASSWORD POLARIS_ROOT_CLIENT_SECRET POLARIS_ROOT_CLIENT_ID POLARIS_TOKEN_BROKER_SECRET; do
+for v in POSTGRES_PASSWORD POLARIS_DB_PASSWORD POLARIS_ROOT_CLIENT_SECRET POLARIS_ROOT_CLIENT_ID POLARIS_TOKEN_BROKER_SECRET; do
   [[ -n "${!v:-}" ]] || { echo "ERROR: $v is not set in the environment"; exit 1; }
 done
+
+# Polaris connects as its own non-superuser role. Creating or updating it here
+# also applies a changed password and migrates older installations.
+docker compose up -d --wait postgres
+docker compose exec -T postgres bash /docker-entrypoint-initdb.d/02-app-role.sh
 
 out="$(docker compose --profile bootstrap run --rm polaris-bootstrap 2>&1)" || {
   echo "$out"

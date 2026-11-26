@@ -8,6 +8,9 @@ services:
       POSTGRES_DB: POLARIS
       POSTGRES_USER: ${POSTGRES_USER:-M73581}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the deployment environment}
+      # Role Polaris connects as; created by postgres/initdb/02-app-role.sh.
+      POLARIS_DB_USER: ${POLARIS_DB_USER:-polaris_app}
+      POLARIS_DB_PASSWORD: ${POLARIS_DB_PASSWORD:?Set POLARIS_DB_PASSWORD in the deployment environment}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
@@ -32,8 +35,8 @@ services:
       QUARKUS_DATASOURCE_JDBC_ADDITIONAL_JDBC_PROPERTIES_CURRENTSCHEMA: POLARIS_SCHEMA
       QUARKUS_DATASOURCE_JDBC_MIN_SIZE: "2"
       QUARKUS_DATASOURCE_JDBC_MAX_SIZE: "20"
-      QUARKUS_DATASOURCE_USERNAME: ${POSTGRES_USER:-M73581}
-      QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the deployment environment}
+      QUARKUS_DATASOURCE_USERNAME: ${POLARIS_DB_USER:-polaris_app}
+      QUARKUS_DATASOURCE_PASSWORD: ${POLARIS_DB_PASSWORD:?Set POLARIS_DB_PASSWORD in the deployment environment}
       QUARKUS_OTEL_SDK_DISABLED: "true"
     command: >
       bootstrap --realm=${POLARIS_REALM:-ISBUS}
@@ -60,8 +63,8 @@ services:
       QUARKUS_DATASOURCE_JDBC_ADDITIONAL_JDBC_PROPERTIES_CURRENTSCHEMA: POLARIS_SCHEMA
       QUARKUS_DATASOURCE_JDBC_MIN_SIZE: "2"
       QUARKUS_DATASOURCE_JDBC_MAX_SIZE: "20"
-      QUARKUS_DATASOURCE_USERNAME: ${POSTGRES_USER:-M73581}
-      QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the deployment environment}
+      QUARKUS_DATASOURCE_USERNAME: ${POLARIS_DB_USER:-polaris_app}
+      QUARKUS_DATASOURCE_PASSWORD: ${POLARIS_DB_PASSWORD:?Set POLARIS_DB_PASSWORD in the deployment environment}
       POLARIS_REALM_CONTEXT_REALMS: ${POLARIS_REALM:-ISBUS}
       QUARKUS_OTEL_SDK_DISABLED: "true"
       # Azure identity used for ADLS credential vending (optional at startup)
