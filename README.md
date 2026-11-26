@@ -82,30 +82,12 @@ networks. Certificate provisioning and renewal belong to that gateway.
 
 ## Deploy
 
-```bash
-git clone <this repo> && cd ApachePolaris
-
-# On an Azure VM, export non-secret configuration. The deploy entry point
-# authenticates with the attached managed identity and loads secrets transiently.
-export VAULT_NAME="<key-vault-name>"
-export IDENTITY_CLIENT_ID="<user-assigned-managed-identity-client-id>"
-export POLARIS_BIND_ADDRESS="<vm-private-ip>"   # address the TLS gateway reaches; never 0.0.0.0
-export AZURE_TENANT_ID="<tenant-id>"
-export AZURE_CLIENT_ID="<polaris-service-principal-app-id>"
-export AZURE_STORAGE_ACCOUNT="<storage-account>"
-export AZURE_STORAGE_CONTAINER="<tableflow-container>"
-export TABLEFLOW_ORG_ID="<tableflow-org-id>"
-export TABLEFLOW_ENV_ID="<tableflow-env-id>"
-
-./scripts/deploy-from-key-vault.sh
-```
-
-This single command validates Compose configuration, starts PostgreSQL,
-bootstraps the realm, waits for Polaris health, checks direct Tableflow
-connectivity, creates the federated catalog, and runs verification. Compose
-uses the pinned Polaris release and fetches images only when they are missing.
-Secrets are fetched from Key Vault at runtime; do not put them in `.env` or
-print the resolved Compose configuration.
+Follow the step-by-step guide:
+[docs/install_instructions_polaris_container.md](docs/install_instructions_polaris_container.md).
+It covers Azure and Confluent setup, VM installation, the one-command deploy
+(`./scripts/deploy-from-key-vault.sh`), automatic recovery and backups, and
+connecting query engines. Secrets are fetched from Key Vault at runtime; do not
+put them in `.env` or print the resolved Compose configuration.
 
 ## Troubleshooting
 
@@ -129,13 +111,13 @@ print the resolved Compose configuration.
 - Use `scripts/compose.sh` for Compose operations so required secrets are loaded
   transiently from Key Vault (export the non-secret deployment settings first):
   `./scripts/compose.sh logs -f polaris`
-- **After any Polaris restart** (manual, VM reboot, Docker upgrade), rerun
-  `./scripts/deploy-from-key-vault.sh`. Polaris 1.9.0 keeps the catalog's
-  Tableflow secret in memory only, so requests through the catalog fail with
-  HTTP 500 until the script recreates it; catalog roles and grants are kept.
+- **After any Polaris restart** (manual, VM reboot, Docker upgrade), Polaris 1.9.0
+  loses the catalog's Tableflow secret. The recovery timer (runbook step 9)
+  restores it within about 5 minutes; without the timer, rerun
+  `./scripts/deploy-from-key-vault.sh`.
 - **Secret rotation**: follow the per-secret table in the
-  [runbook](docs/install_instructions_polaris_container.md#rotate-secrets).
+  [runbook](docs/install_instructions_polaris_container.md#step-13-change-secrets-rotation).
 - **Query engine access**: `scripts/create-reader-principal.sh <name>` creates
-  a read-only principal (runbook section 6.2).
-- **Backup**: `./scripts/backup-postgres.sh` (daily via `deploy/systemd/polaris-backup.timer`; copy `BACKUP_DIR` off the VM)
-- **Restart recovery**: Polaris 1.9.0 forgets the Tableflow secret on restart; install `deploy/systemd/polaris-federation-reconcile.timer` to restore it automatically
+  a read-only principal (runbook step 11).
+- **Backup and restore**: daily via `polaris-backup.timer`, copied to Blob storage;
+  on demand with `sudo systemctl start polaris-backup.service` (runbook step 14).
