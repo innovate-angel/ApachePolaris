@@ -39,6 +39,10 @@ TOKEN_URI="${TABLEFLOW_TOKEN_URI:-${CATALOG_URI}/v1/oauth/tokens}"
 # completed restore, so an interrupted run resumes from it. Contains no secrets.
 STATE_DIR="${POLARIS_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/polaris}"
 SNAPSHOT="${STATE_DIR}/catalog-rbac-${REALM}-${CATALOG}.json"
+# Serialize with other runs (timer, manual, reader provisioning) for this deployment.
+mkdir -p "$STATE_DIR"
+exec 9>"${STATE_DIR}/.lock"
+flock 9
 
 echo "==> Getting Polaris administrator token (${POLARIS_ROOT_CLIENT_ID}) from ${POLARIS_URL}"
 # The secret is passed on stdin so it never appears in the process list, and the

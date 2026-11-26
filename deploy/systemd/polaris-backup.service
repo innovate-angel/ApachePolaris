@@ -1,0 +1,14 @@
+[Unit]
+Description=Back up the Polaris PostgreSQL metastore
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust to the checkout location and the deployment's environment file
+# (non-secret settings only; secrets come from Key Vault).
+WorkingDirectory=/opt/polaris
+Environment=BACKUP_DIR=/var/backups/polaris
+EnvironmentFile=-/etc/polaris/deployment.env
+ExecStart=/bin/bash /opt/polaris/scripts/backup-postgres.sh

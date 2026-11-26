@@ -137,4 +137,5 @@ print the resolved Compose configuration.
   [runbook](docs/install_instructions_polaris_container.md#rotate-secrets).
 - **Query engine access**: `scripts/create-reader-principal.sh <name>` creates
   a read-only principal (runbook section 6.2).
-- **Backup**: `./scripts/compose.sh exec -T postgres pg_dump -U M73581 POLARIS > backup.sql`
+- **Backup**: `./scripts/backup-postgres.sh` (daily via `deploy/systemd/polaris-backup.timer`; copy `BACKUP_DIR` off the VM)
+- **Restart recovery**: Polaris 1.9.0 forgets the Tableflow secret on restart; install `deploy/systemd/polaris-federation-reconcile.timer` to restore it automatically

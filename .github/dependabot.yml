@@ -5,6 +5,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # A PostgreSQL major upgrade needs pg_upgrade (or dump/restore) of the
+      # existing volume; a tag bump alone leaves the metastore unreadable.
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
