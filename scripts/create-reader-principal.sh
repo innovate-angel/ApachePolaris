@@ -27,6 +27,12 @@ MGMT="${POLARIS_URL}/api/management/v1"
 CATALOG="${POLARIS_CATALOG_NAME:-tableflow}"
 PRINCIPAL_ROLE="${POLARIS_READER_PRINCIPAL_ROLE:-${CATALOG}_readers}"
 CATALOG_ROLE="${POLARIS_READER_CATALOG_ROLE:-${CATALOG}_read_only}"
+# Same lock as setup-tableflow-federation.sh, so a catalog recreation cannot
+# drop roles created mid-run.
+STATE_DIR="${POLARIS_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/polaris}"
+mkdir -p "$STATE_DIR"
+exec 9>"${STATE_DIR}/.lock"
+flock 9
 # List and describe namespaces and tables, and load a table with vended read
 # credentials. Nothing that writes, drops, or administers.
 PRIVILEGES=(NAMESPACE_LIST NAMESPACE_READ_PROPERTIES TABLE_LIST TABLE_READ_PROPERTIES TABLE_READ_DATA)
